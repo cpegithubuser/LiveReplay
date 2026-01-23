@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AVFoundation
+import Combine
 
 /// A UIView whose backing layer is AVPlayerLayer. You can assign an AVPlayer to its `.player` property.
 final class PlayerUIView: UIView {

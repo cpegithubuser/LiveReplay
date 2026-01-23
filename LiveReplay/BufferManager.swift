@@ -6,6 +6,7 @@
 //
 
 import AVKit
+import Combine
 
 final class BufferManager: ObservableObject {
     static let shared = BufferManager()

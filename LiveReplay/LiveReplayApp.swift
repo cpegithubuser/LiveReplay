@@ -7,6 +7,7 @@
 
 import SwiftUI
 import CoreMedia
+import AVFoundation
 
 @main
 struct LiveReplayApp: App {

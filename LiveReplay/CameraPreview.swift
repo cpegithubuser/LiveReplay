@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AVFoundation
+import Combine
 
 // 1) UIView whose backing layer is AVCaptureVideoPreviewLayer
 final class CameraPreviewUIView: UIView {

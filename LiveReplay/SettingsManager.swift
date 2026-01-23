@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Combine
 
 class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
