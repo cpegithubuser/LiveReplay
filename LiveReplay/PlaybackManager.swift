@@ -462,14 +462,17 @@
             isJumping = true
 
             // 2️⃣ Figure out which buffer‐slot holds that time…
-            let oldest = bufferManager.segmentIndex % bufferManager.maxBufferSize
+            // Get thread-safe snapshot of buffer state
+            let snapshot = bufferManager.getBufferSnapshot()
+            let oldest = snapshot.segmentIndex % snapshot.maxBufferSize
             var chosenIndex: Int?
             var localOffset = CMTime.zero
 
-            for i in 0..<bufferManager.maxBufferSize {
-              let idx = (oldest + i) % bufferManager.maxBufferSize
-              if let item = bufferManager.playerItemBuffer[idx],
-                 let startTime = bufferManager.timingBuffer[idx],
+            // Iterate through buffer slots to find the one containing absoluteTime
+            for i in 0..<snapshot.maxBufferSize {
+              let idx = (oldest + i) % snapshot.maxBufferSize
+              // Use thread-safe accessor to get both item and timing
+              if let (item, startTime) = bufferManager.getPlayerItemAndTiming(at: idx),
                  CMTimeAdd(startTime, item.duration) > absoluteTime
               {
                 chosenIndex = idx
@@ -478,7 +481,7 @@
               }
             }
             guard let bufferIndex = chosenIndex,
-                  let targetItem = bufferManager.playerItemBuffer[bufferIndex],
+                  let (targetItem, _) = bufferManager.getPlayerItemAndTiming(at: bufferIndex),
                   let currentItem = playerConstant.currentItem
             else {
               printBug(.bugSmoothlyJump, "⚠️ No buffer slot for \(absoluteTime); aborting jump.")
@@ -675,11 +678,14 @@
             if doBug(.bugBuffer) {
                 printBug(.bugBuffer, "🕰️ Player Items (Oldest to Newest):")
 
-                for i in 0..<bufferManager.maxBufferSize {
-                    let bufferIndex = (bufferManager.segmentIndex + i) % bufferManager.maxBufferSize  // Iterate circularly
-                    if let item = bufferManager.playerItemBuffer[bufferIndex] {
+                // Get thread-safe snapshot for iteration
+                let snapshot = bufferManager.getBufferSnapshot()
+                for i in 0..<snapshot.maxBufferSize {
+                    let bufferIndex = (snapshot.segmentIndex + i) % snapshot.maxBufferSize  // Iterate circularly
+                    // Use thread-safe accessor
+                    if let (item, timing) = bufferManager.getPlayerItemAndTiming(at: bufferIndex) {
                         let memoryAddress = Unmanaged.passUnretained(item).toOpaque()  // Get Swift-style memory address
-                        printBug(.bugBuffer, "🔹 \(bufferIndex): \(describePlayerItemWithAssets(item))", bufferManager.timingBuffer[bufferIndex], currentTime)
+                        printBug(.bugBuffer, "🔹 \(bufferIndex): \(describePlayerItemWithAssets(item))", timing, currentTime)
                     }
                 }
             }

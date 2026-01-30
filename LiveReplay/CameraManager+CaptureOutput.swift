@@ -48,7 +48,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 startTime = sampleBuffer.presentationTimeStamp
                 assetWriter.startSession(atSourceTime: startTime)
                 /// Here we record the CACurrentMediaTime of the first frame of video. This first frame is going to be "zero" time so we
-                bufferManager.bufferTimeOffset = CMTimeSubtract(.zero, CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600))
+                /// set the bufferTimeOffset to map real-time to buffer-time (where first frame = time zero)
+                /// Use thread-safe setter instead of direct assignment
+                let initialOffset = CMTimeSubtract(.zero, CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600))
+                bufferManager.setBufferTimeOffset(initialOffset)
                 
             } else if writer.status == .writing {
                 //       print("Asset writer already writing.")

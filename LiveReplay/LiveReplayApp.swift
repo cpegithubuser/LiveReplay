@@ -37,10 +37,8 @@ struct LiveReplayApp: App {
                         let deltaCM = CMTime(seconds: delta, preferredTimescale: 600)
 
                         // 3) Shift your bufferTimeOffset so `currentTime` snaps back
-                        BufferManager.shared.bufferTimeOffset = CMTimeAdd(
-                          BufferManager.shared.bufferTimeOffset,
-                          deltaCM
-                        )
+                        // Use thread-safe method to adjust bufferTimeOffset
+                        BufferManager.shared.adjustBufferTimeOffset(by: deltaCM)
 
                         // 4) Restart camera capture & asset writer
                         CameraManager.shared.initializeCaptureSession()
