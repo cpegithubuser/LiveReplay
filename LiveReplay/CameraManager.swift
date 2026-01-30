@@ -5,9 +5,11 @@
 //  Created by Albert Soong on 1/29/25.
 //
 
+import AVFoundation
 import AVKit
-import CoreMedia
 import Combine
+import CoreMedia
+import Foundation
 
 final class CameraManager: NSObject, ObservableObject {
     
@@ -26,37 +28,45 @@ final class CameraManager: NSObject, ObservableObject {
 
     private let captureQueue = DispatchQueue(
         label: "com.myapp.camera.captureQueue",
- //       qos: .userInteractive
         qos: .userInitiated
     )
     
-    // This is the number of frames that we dropped/skipped in captureoutput. We will drop a few when the session starts to eliminate dark frames.
-    var droppedFrames: Int = 0
+    /// Frames to drop at session start to avoid dark frames. Access synchronized via droppedFramesLock.
+    private static let initialFramesToDrop = 3
+    private let droppedFramesLock = NSLock()
+    private var _droppedFramesCount: Int = 0
+    
+    /// Thread-safe: returns true if this frame should be dropped (caller should return without processing).
+    func shouldDropFrame() -> Bool {
+        droppedFramesLock.lock()
+        defer { droppedFramesLock.unlock() }
+        if _droppedFramesCount < Self.initialFramesToDrop {
+            _droppedFramesCount += 1
+            return true
+        }
+        return false
+    }
+    
+    /// Call from writer queue when (re)initializing the writer. Thread-safe.
+    func resetDroppedFrames() {
+        droppedFramesLock.lock()
+        defer { droppedFramesLock.unlock() }
+        _droppedFramesCount = 0
+    }
     
     @Published var cameraSession: AVCaptureSession? = nil
     
     @Published var cameraAspectRatio: CGFloat = 4.0/3.0
     
-    var delegate: AVCaptureVideoDataOutputSampleBufferDelegate?
-    
-    //asset writer
+    // Asset writer — optional so we can handle creation failure without crashing.
     let assetWriterInterval: Double = 1.0 // seconds
     lazy var segmentDuration = CMTimeMake(value: Int64(assetWriterInterval * 10), timescale: 10)
     
-    var assetWriter: AVAssetWriter!
-    var videoInput: AVAssetWriterInput!
-    var startTime: CMTime!
+    var assetWriter: AVAssetWriter?
+    var videoInput: AVAssetWriterInput?
+    var startTime: CMTime?
 
     var initializationData = Data()
-    
-    var writerStarted = false
-    
-//    @Published var cameraLocation: AVCaptureDevice.Position = .back {
-//        didSet {
-//            configureCamera()
-//            handleDeviceOrientationChange()
-//        }
-//    }
     
     enum CameraPosition {
         case back, front
@@ -101,6 +111,7 @@ final class CameraManager: NSObject, ObservableObject {
             cancelAssetWriter()
         }
         didSet {
+            guard availableFormats.indices.contains(selectedFormatIndex) else { return }
             // 1) recompute fps for the new format, but only 30/60/120/240 if supported
             let ranges = availableFormats[selectedFormatIndex].videoSupportedFrameRateRanges
             let standardRates: [Double] = [30, 60, 120, 240]
@@ -198,49 +209,41 @@ final class CameraManager: NSObject, ObservableObject {
             availableFrameRates = ranges.map { $0.maxFrameRate }.sorted()
             // clamp the selectedFrameRate
             if !availableFrameRates.contains(selectedFrameRate) {
-                selectedFrameRate = availableFrameRates.first ?? availableFrameRates.first ?? 30
+                selectedFrameRate = availableFrameRates.first ?? 30
             }
         } else {
             availableFrameRates = []
             selectedFrameRate = 0
         }
         
-        // clamp the selected index
-        // clamp, *then* restart
-        let safeIndex = min(selectedFormatIndex, availableFormats.count-1)
+        let safeIndex = min(selectedFormatIndex, availableFormats.count - 1)
         if safeIndex != selectedFormatIndex {
-            selectedFormatIndex = safeIndex   // this will call restartSession()
-        }
-        
-        if selectedFormatIndex >= availableFormats.count {
-            selectedFormatIndex = 0       // this will trigger restartSession() once
+            selectedFormatIndex = safeIndex
         }
     }
 
 
 
     enum CameraError: Error {
-        case noDevice, cannotAddInput, cannotAddOutput
+        case noDevice, cannotAddInput, cannotAddOutput, writerCreationFailed(Error)
     }
+    
+    /// Non-nil when writer creation failed; cleared when writer is created successfully. UI can observe.
+    @Published var cameraError: Error?
     
     /// convenience: the actual AVCaptureDevice the user picked
     var selectedDevice: AVCaptureDevice? {
         availableDevices.first { $0.uniqueID == selectedDeviceUniqueID }
     }
     
-    @Published var captureVideoOrientation: AVCaptureVideoOrientation = .landscapeRight {
-        didSet {
-            if let connection = cameraSession?.outputs.first?.connections.first {
-//                connection.videoOrientation = captureVideoOrientation
-                connection.videoOrientation = .landscapeRight
-                print("captureVideoOrientation \(captureVideoOrientation)")
-            }
-        }
+    /// Single source of truth for orientation; forwards to selectedVideoOrientation.
+    var captureVideoOrientation: AVCaptureVideoOrientation {
+        get { selectedVideoOrientation }
+        set { selectedVideoOrientation = newValue }
     }
     
     @Published var selectedVideoOrientation: AVCaptureVideoOrientation = .landscapeRight {
         didSet {
-            // 1) update the live AVCaptureConnection
             if let conn = cameraSession?
                 .outputs
                 .compactMap({ $0 as? AVCaptureVideoDataOutput })
@@ -249,8 +252,6 @@ final class CameraManager: NSObject, ObservableObject {
             {
                 conn.videoOrientation = selectedVideoOrientation
             }
-
-            // 2) re-initialize the writer to pick up the new orientation
             initializeAssetWriter()
         }
     }
@@ -258,12 +259,8 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var mirroredReplay = false {
         didSet {
             if let connection = cameraSession?.outputs.first?.connections.first {
-                if mirroredReplay == true {
-                    connection.isVideoMirrored = true
-                } else {
-                    connection.isVideoMirrored = false
-                }
-            }
+            connection.isVideoMirrored = mirroredReplay
+        }
         }
     }
 
@@ -278,28 +275,14 @@ final class CameraManager: NSObject, ObservableObject {
     
     
     @objc func handleDeviceOrientationChange() {
-        // Determine video orientation based on device orientation
         let videoOrientation: AVCaptureVideoOrientation
         switch UIDevice.current.orientation {
-//        case .portrait:
-//            videoOrientation = .portrait
-//        case .landscapeLeft:
-//            videoOrientation = .landscapeRight
-//        case .landscapeRight:
-//            videoOrientation = .landscapeLeft
-//        case .portraitUpsideDown:
-//            return // Ignore upside-down orientation
-//        default:
-//            videoOrientation = .portrait // Default to portrait for other cases
         default:
-            videoOrientation = .landscapeRight // Default to portrait for other cases
+            videoOrientation = .landscapeRight
         }
         DispatchQueue.main.async {
-            self.captureVideoOrientation = videoOrientation
+            self.selectedVideoOrientation = videoOrientation
         }
-        print("Updated video orientation to: \(videoOrientation.rawValue)")
-
-        // Reinitialize the asset writer with updated settings
         initializeAssetWriter()
     }
     
@@ -410,11 +393,12 @@ final class CameraManager: NSObject, ObservableObject {
 
 extension CameraManager {
     
-    func cancelCaptureSession() {
+    func cancelCaptureSession(completion: (() -> Void)? = nil) {
         sessionQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            // If there’s an existing session, tear it down
+            guard let self = self else {
+                DispatchQueue.main.async { completion?() }
+                return
+            }
             if let session = self.cameraSession {
                 session.beginConfiguration()
                 session.inputs.forEach  { session.removeInput($0) }
@@ -425,7 +409,10 @@ extension CameraManager {
                 }
                 DispatchQueue.main.async {
                     self.cameraSession = nil
+                    completion?()
                 }
+            } else {
+                DispatchQueue.main.async { completion?() }
             }
         }
     }
@@ -460,11 +447,11 @@ extension CameraManager {
     
     /// Create a capture session
     private func createCaptureSession() throws {
-        /// Check for a camera device. If none, we're not goign to start a capture session. This function will run again when a camera device is available (from didset)
         guard let device = selectedDevice else {
             print("⏳ Waiting for camera device…")
             return
-          }
+        }
+        guard !availableFormats.isEmpty else { return }
         let idx      = min(selectedFormatIndex, availableFormats.count - 1)
         let format   = availableFormats[idx]
         let fpsValue = Int32(selectedFrameRate)
@@ -499,7 +486,7 @@ extension CameraManager {
         
         // — live‐connection settings —
         if let conn = output.connection(with: .video) {
-            conn.videoOrientation = captureVideoOrientation
+            conn.videoOrientation = selectedVideoOrientation
             conn.isVideoMirrored  = mirroredReplay
         }
         
@@ -521,20 +508,21 @@ extension CameraManager {
 
 extension CameraManager {
     
-    func cancelAssetWriter() {
+    func cancelAssetWriter(completion: (() -> Void)? = nil) {
         writerQueue.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self else { completion?(); return }
             if let writer = self.assetWriter, writer.status == .writing {
                 writer.cancelWriting()
             }
+            DispatchQueue.main.async { completion?() }
         }
     }
     
-    /// Public call to start the asset writer. Finished the old one first if needed.
+    /// Public call to start the asset writer. Finishes the old one first if needed.
     func initializeAssetWriter() {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
-            self.droppedFrames = 0
+            self.resetDroppedFrames()
             BufferManager.shared.resetBuffer()
             self.createAssetWriter()
         }
@@ -544,6 +532,10 @@ extension CameraManager {
     private func createAssetWriter() {
         guard let session = cameraSession, session.isRunning else {
             print("⏳ createAssetWriter deferred: capture session not running")
+            return
+        }
+        guard !availableFormats.isEmpty, availableFormats.indices.contains(selectedFormatIndex) else {
+            print("⏳ createAssetWriter deferred: no format at index \(selectedFormatIndex)")
             return
         }
         // snapshot all settings
@@ -572,22 +564,31 @@ extension CameraManager {
             AVVideoCompressionPropertiesKey: compression
         ]
 
-        // build the writer
-        assetWriter = try? AVAssetWriter(contentType: .mpeg4Movie)
-        assetWriter?.outputFileTypeProfile          = .mpeg4AppleHLS
-        assetWriter?.preferredOutputSegmentInterval = segmentDuration
-        assetWriter?.initialSegmentStartTime        = .zero
-        assetWriter?.delegate                       = self
+        // Build the writer
+        let newInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        newInput.expectsMediaDataInRealTime = true
+        newInput.performsMultiPassEncodingIfSupported = false
 
-        videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
-        videoInput.expectsMediaDataInRealTime = true
-        videoInput.performsMultiPassEncodingIfSupported = false
-
-        if let w = assetWriter, w.canAdd(videoInput) {
-            w.add(videoInput)
+        do {
+            let writer = try AVAssetWriter(contentType: .mpeg4Movie)
+            writer.outputFileTypeProfile          = .mpeg4AppleHLS
+            writer.preferredOutputSegmentInterval = segmentDuration
+            writer.initialSegmentStartTime        = .zero
+            writer.delegate                       = self
+            if writer.canAdd(newInput) {
+                writer.add(newInput)
+            }
+            assetWriter = writer
+            videoInput = newInput
+            DispatchQueue.main.async { self.cameraError = nil }
+            print("📝 AssetWriter initialized for orientation \(orientation)")
+        } catch {
+            assetWriter = nil
+            videoInput = nil
+            let wrapped = CameraError.writerCreationFailed(error)
+            DispatchQueue.main.async { self.cameraError = wrapped }
+            print("⚠️ createAssetWriter failed:", error)
         }
-
-        print("📝 AssetWriter initialized for orientation \(orientation)")
     }
     
 }
