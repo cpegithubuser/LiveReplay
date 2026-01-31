@@ -12,7 +12,7 @@ final class OnScreenLogger: ObservableObject {
     static let shared = OnScreenLogger()
     
     /// When false, OnScreenLog() does nothing and the overlay is hidden.
-    var isEnabled: Bool = true
+    var isEnabled: Bool = false
     
     /// When false, the log panel is hidden; a "Show log" button remains to show it again.
     @Published var isOverlayVisible: Bool = true
