@@ -51,6 +51,10 @@ final class CameraManager: NSObject, ObservableObject {
     
     var writerStarted = false
     
+    /// When true, write each segment to disk as segment_N.mp4 in debugSegmentsFolder; folder is cleared on launch.
+    var debugWriteSegmentsToDisk: Bool = false
+    private static let debugSegmentsFolderName = "debug_segments"
+    
 //    @Published var cameraLocation: AVCaptureDevice.Position = .back {
 //        didSet {
 //            configureCamera()
@@ -269,11 +273,27 @@ final class CameraManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        if debugWriteSegmentsToDisk {
+            clearDebugSegmentsFolder()
+        }
         updateAvailableDevices()
         printAllCaptureDeviceFormats()
         // no run addDeviceOrientationObserver. just suppoerting landscape right to start
         // addDeviceOrientationObserver()
         initializeCaptureSession()
+    }
+    
+    /// URL for debug segment writes (Documents/debug_segments/). Call clearDebugSegmentsFolder() when enabling.
+    func debugSegmentsFolderURL() -> URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent(Self.debugSegmentsFolderName, isDirectory: true)
+    }
+    
+    /// Remove entire debug_segments folder so next writes start clean. Call on launch when debugWriteSegmentsToDisk is on.
+    func clearDebugSegmentsFolder() {
+        guard let url = debugSegmentsFolderURL() else { return }
+        try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
     
     

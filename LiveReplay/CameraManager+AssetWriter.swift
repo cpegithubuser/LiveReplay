@@ -19,7 +19,11 @@ extension CameraManager: AVAssetWriterDelegate {
         case .separable:
             let mp4Data = initializationData + segmentData
             
-            //   let segmentName = "segment_\(bufferManager.segmentIndex).m4s"
+            if debugWriteSegmentsToDisk, let folder = debugSegmentsFolderURL() {
+                let fileURL = folder.appendingPathComponent("segment_\(bufferManager.segmentIndex).mp4")
+                try? mp4Data.write(to: fileURL)
+                OnScreenLog("writing to disk: \(fileURL.path)")
+            }
             
             printBug(.bugAssetWriter, "segment:", bufferManager.segmentIndex+1)
             printBug(.bugAssetWriter, "now time, current playing time", playbackManager.currentTime, playbackManager.getCurrentPlayingTime())
