@@ -344,6 +344,7 @@ struct ContentView: View {
         }
         .background(Color.black)
         .ignoresSafeArea()
+        .overlay(OnScreenLogOverlayView())
     }
     struct NoTapAnimationStyle: PrimitiveButtonStyle {
         func makeBody(configuration: Configuration) -> some View {
