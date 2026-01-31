@@ -27,20 +27,17 @@ extension CameraManager: AVAssetWriterDelegate {
             //  let asset = AVAsset(url: fileURL)
             printBug(.bugResourceLoader, "enter avurlasset loader")
             guard let asset = AVURLAsset(mp4Data: mp4Data) else { return }
-//            let tracks = asset.tracks  // 🚨 Forces AVFoundation to check file existence
             printBug(.bugResourceLoader, "exit avurlasset loader")
-//            printBug(.bugResourceLoader, "📊 [AVAsset] Tracks: \(tracks)")
-//            printBug(.bugResourceLoader, "📊 [AVAsset] Playable: \(asset.isPlayable)")
             
-//            printBug(.bugAssetWriter, asset)
-//            let startPTS = tracks.first?.timeRange.start
-//            printBug(.bugAssetWriter, "Asset first frame PTS: \(startPTS?.seconds)")
+            /// Wrap segment in AVMutableComposition → AVComposition before adding to queue (reduces jumpiness)
+            let comp = AVMutableComposition()
+            guard let track = comp.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { return }
+            guard let srcTrack = asset.tracks(withMediaType: .video).first else { return }
+            let range = CMTimeRange(start: .zero, duration: asset.duration)
+            try? track.insertTimeRange(range, of: srcTrack, at: .zero)
+            guard let copied = comp.copy() as? AVComposition else { return }
             
-            /// Create a playerItem to insert at the end of the current AVQueuePlayer
-            let playerItem = AVPlayerItem(asset: asset)
-
-            //let ptr = Unmanaged.passUnretained(playerItem).toOpaque()
-            //printBug(.bugPlayerItemObserver, "🤖 setting assoc on item @ \(ptr) start: \(bufferManager.nextBufferStartTime)")
+            let playerItem = AVPlayerItem(asset: copied)
             objc_setAssociatedObject(playerItem, &playbackManager.playerItemStartTimeKey, NSValue(time: bufferManager.nextBufferStartTime), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             
             DispatchQueue.main.async {
@@ -49,7 +46,6 @@ extension CameraManager: AVAssetWriterDelegate {
             
             printBug(.bugAssetWriter, "✅ [AVPlayer] Added valid player item.")
             
-            /// Add this asset to the buffer
             bufferManager.addNewAsset(asset: asset)
 
             playbackManager.printPlayerItemBuffer()
