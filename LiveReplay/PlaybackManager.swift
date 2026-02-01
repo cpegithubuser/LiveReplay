@@ -224,10 +224,11 @@
 
             printBug(.bugForwardRewind, "rewind to delay:", clampedSec, "available:", availableSec)
 
-            DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.main.async {
                 self.pausePlayerTemporarily()
-                self.scrub(to: targetAbs, allowSeekOnly: true)
-                self.playPlayerIfWasPlaying()
+                self.scrub(to: targetAbs, allowSeekOnly: true) {
+                    self.playPlayerIfWasPlaying()
+                }
             }
         }
         
@@ -256,10 +257,11 @@
 
             printBug(.bugForwardRewind, "forward to delay:", clampedSec, "available:", availableSec)
 
-            DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.main.async {
                 self.pausePlayerTemporarily()
-                self.scrub(to: targetAbs, allowSeekOnly: true)
-                self.playPlayerIfWasPlaying()
+                self.scrub(to: targetAbs, allowSeekOnly: true) {
+                    self.playPlayerIfWasPlaying()
+                }
             }
         }
         
@@ -452,11 +454,12 @@
         
         private var isJumping = false
 
-        func jump(to absoluteTime: CMTime) {
+        func jump(to absoluteTime: CMTime, completion: (() -> Void)? = nil) {
             printBug(.bugSmoothlyJump, "🔀 jump(to: \(absoluteTime)) called; isJumping=\(isJumping)")
             // 1️⃣ Drop any new jumps while one is in flight
             guard !isJumping else {
                 printBug(.bugSmoothlyJump, "⚠️ Already jumping—ignoring this one.")
+                completion?()
                 return
             }
             isJumping = true
@@ -483,6 +486,7 @@
             else {
               printBug(.bugSmoothlyJump, "⚠️ No buffer slot for \(absoluteTime); aborting jump.")
               isJumping = false
+              completion?()
               return
             }
 
@@ -511,6 +515,7 @@
 
                   printBug(.bugSmoothlyJump, "✅ Jump complete")
                   self.isJumping = false
+                  completion?()
                 }
               }
             }
@@ -518,9 +523,10 @@
 
 
         
-        func scrub(to targetTime: CMTime, allowSeekOnly: Bool) {
+        func scrub(to targetTime: CMTime, allowSeekOnly: Bool, completion: (() -> Void)? = nil) {
             guard let currentItem = playerConstant.currentItem else {
                 printBug(.bugSmoothlyJump, "⚠️ No currentItem—nothing to scrub.")
+                completion?()
                 return
             }
             print("target time", targetTime)
@@ -534,12 +540,12 @@
                 // …it falls inside the current item → just seek locally
                 let localSeekTime = CMTimeSubtract(targetTime, itemPlayheadOffset)
                 printBug(.bugSmoothlyJump, "Seeking inside currentItem to \(localSeekTime)")
-                seeker?.smoothlySeek(to: localSeekTime)
+                seeker?.smoothlySeek(to: localSeekTime, completion: completion)
             } else {
                 // …it’s outside → find the right buffer slot & reload the queue
                 printBug(.bugSmoothlyJump, "Need to jump to \(targetTime)")
             //    jumpToPlayingTime(targetTime: targetTime)
-                jump(to: targetTime)
+                jump(to: targetTime, completion: completion)
             }
         }
         

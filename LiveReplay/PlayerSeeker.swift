@@ -41,6 +41,9 @@ class PlayerSeeker {
     /// The seek that starts when the current seek finishes.
     private(set) var nextSeek: Target?
 
+    /// Completion to call when all seeks (for this request) are done.
+    private var seekCompletion: (() -> Void)?
+
     init(player: AVPlayer) {
         self.player = player
     }
@@ -62,15 +65,19 @@ class PlayerSeeker {
     /// (such as from a `UISlider`). When the current seek finishes, the latest of the
     /// enqueued ones is started. To start a seek immediately, use `directlySeek`.
     
-    func smoothlySeek(to time: CMTime, toleranceBefore: CMTime = .zero, toleranceAfter: CMTime = .zero) {
+    func smoothlySeek(to time: CMTime, toleranceBefore: CMTime = .zero, toleranceAfter: CMTime = .zero, completion: (() -> Void)? = nil) {
         let target = Target(time: time, toleranceBefore: toleranceBefore, toleranceAfter: toleranceAfter)
-        smoothlySeek(to: target)
+        smoothlySeek(to: target, completion: completion)
     }
 
-    func smoothlySeek(to target: Target) {
-        guard target.time != player.currentTime() else { return }
+    func smoothlySeek(to target: Target, completion: (() -> Void)? = nil) {
+        guard target.time != player.currentTime() else {
+            completion?()
+            return
+        }
 
         nextSeek = target
+        seekCompletion = completion
 
         if !isSeeking {
             if player.rate > 0 {
@@ -121,6 +128,9 @@ class PlayerSeeker {
     private func didFinishAllSeeks() {
         currentSeek = nil
         nextSeek = nil
+        let block = seekCompletion
+        seekCompletion = nil
+        block?()
     }
     
 }
