@@ -23,6 +23,12 @@ struct ContentView: View {
     @GestureState private var isDragging: Bool = false
     @State private var isScrubbing: Bool = false
     @State private var progress: CGFloat = 0
+    /// Smoothed progress for knob/label when not scrubbing (reduces jitter from AVPlayer time).
+    @State private var smoothedProgress: CGFloat = 0
+    private let progressSmoothingAlpha: CGFloat = 0.2
+    /// After scrub release, use raw progress for this long so knob doesn't slowly slide (snap window).
+    @State private var lastScrubEndTime: Date? = nil
+    private let scrubSnapWindowSeconds: TimeInterval = 0.25
     @State private var available: CGFloat = 0
     @State private var lastDraggedProgress: CGFloat = 0
     @State private var dragStartTranslation: CGFloat = 0
@@ -96,7 +102,10 @@ struct ContentView: View {
                                 VideoSeekerView(size)
                                 HStack(spacing: 20) { // Spacing between buttons
                                     // Reverse 10s Button
-                                    Button(action: playbackManager.rewind10Seconds) {
+                                    Button(action: {
+                                        lastScrubEndTime = Date()  // snap: knob jumps instead of drifting
+                                        playbackManager.rewind10Seconds()
+                                    }) {
                                         Image(systemName: "gobackward.10")
                                             .resizable()
                                             .scaledToFit()
@@ -118,7 +127,10 @@ struct ContentView: View {
                                     }
                                     
                                     // Forward 10s Button
-                                    Button(action: playbackManager.forward10Seconds) {
+                                    Button(action: {
+                                        lastScrubEndTime = Date()  // snap: knob jumps instead of drifting
+                                        playbackManager.forward10Seconds()
+                                    }) {
                                         Image(systemName: "goforward.10")
                                             .resizable()
                                             .scaledToFit()
@@ -580,7 +592,17 @@ struct ContentView: View {
     }
 
     // MARK: - Scrubber fractions
-
+    //
+    // Target vs actual time (live buffer):
+    // - "Now" (currentTime) = latest time in the buffer; it moves forward as we record.
+    // - Playback position (getCurrentPlayingTime()) = where we're playing in that timeline.
+    // - Actual delay = now − play = how many seconds "ago" we're viewing (what the knob shows).
+    // - Target delay (playbackManager.delayTime) = what we *want* the delay to be (e.g. "stay at 5s ago").
+    // When we scrub, we seek to a position and set delayTime to that measured delay; time keeps moving
+    // so actual delay can drift. The optional adjustPlaybackSpeedToReachDelayTime() can chase the target
+    // by changing rate (0.5x / 1x / 2x). Improvements: e.g. snap knob after scrub (done), or show both
+    // target and actual in UI if we want to expose the distinction.
+    //
     /// Computes:
     ///  - leftBound (white-left) from buffer fill vs max window
     ///  - rightBound (white-right) from min-scrub guard band
@@ -609,6 +631,7 @@ struct ContentView: View {
             isScrubbableReady = false
             if !isScrubbing {
                 progress = rightBound
+                smoothedProgress = rightBound
                 displayDelayTime = nil   // undefined; don’t show "0s"
             }
             return
@@ -629,10 +652,17 @@ struct ContentView: View {
         // Treat “near live” as undefined (or show LIVE) only for the unpinned display
         let liveEPS = 0.05
         if !isScrubbing {
-            //progress = min(max(1 - (delayForProgress / maxD), leftBound), rightBound)
             let visual = max(1 - (actualDelayRaw / maxD), leftBound)
             progress = min(visual, 1)   // can be > rightBound, but never > 1
             displayDelayTime = (actualDelayRaw <= liveEPS) ? nil : actualDelayRaw
+            // EMA smooth knob/label to reduce jitter; skip smoothing for a short window after scrub release so knob snaps instead of sliding
+            if let t = lastScrubEndTime, Date().timeIntervalSince(t) < scrubSnapWindowSeconds {
+                smoothedProgress = progress  // snap: no EMA so no post-release slide
+            } else {
+                lastScrubEndTime = nil
+                smoothedProgress += progressSmoothingAlpha * (progress - smoothedProgress)
+                smoothedProgress = min(max(smoothedProgress, leftBound), 1)
+            }
         }
     }
 
@@ -781,7 +811,8 @@ struct ContentView: View {
             // Convert to a time delay (seconds)
             let markerDelay = (1 - clampedMarker) * playbackManager.maxScrubbingDelay.seconds
 
-            
+            // Use smoothed progress for display when not scrubbing (reduces jitter); when scrubbing or in snap window use raw progress
+            let displayProgress = isScrubbing ? progress : smoothedProgress
             
             ZStack(alignment: .leading) {
                 Rectangle()
@@ -802,7 +833,7 @@ struct ContentView: View {
                   .offset(x: barWidth * leftBound)
 
                 // past portion in window (red)
-                let progressInWindow = min(progress, rightBound)
+                let progressInWindow = min(displayProgress, rightBound)
                 Rectangle()
                   .fill(.red)
                   .frame(width: barWidth * max(progressInWindow - leftBound, 0))
@@ -844,7 +875,7 @@ struct ContentView: View {
                         .frame(width: knobTouchSize, height: knobTouchSize)
                         .contentShape(Rectangle())
                     /// Moving Along Side With Gesture Progress
-                        .offset(x: barWidth * progress + margin - knobTouchHalf)
+                        .offset(x: barWidth * displayProgress + margin - knobTouchHalf)
                         .gesture(
                             DragGesture(minimumDistance: 0)
                                 .updating($isDragging, body: { _, out, _ in
@@ -885,6 +916,8 @@ struct ContentView: View {
                             
                                 .onEnded { _ in
                                     lastDraggedProgress = progress
+                                    smoothedProgress = progress
+                                    lastScrubEndTime = Date()  // snap window: use raw progress for a bit so knob doesn't slide
                                     dragStartTranslation = 0
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                         isScrubbing = false
@@ -970,7 +1003,9 @@ struct ContentView: View {
             .overlay(alignment: .bottomLeading) {
                 Group {
                     if let d = effectiveDelaySeconds() {
-                        Text("\(formatTimeDifference(d))s ago")
+                        // Round to 0.1s so label doesn't flicker (e.g. 5.0 vs 5.1)
+                        let rounded = (d * 10).rounded() / 10
+                        Text("\(formatTimeDifference(rounded))s ago")
                             .foregroundColor(.white)
                     } else if isScrubbableReady {
                         Text("LIVE")
@@ -982,10 +1017,10 @@ struct ContentView: View {
                 }
                 .font(.system(size: 20))
                 .frame(width: 150, height: 20)
-                .offset(x: barWidth * progress, y: -10)
+                .offset(x: barWidth * displayProgress, y: -10)
             }
             .overlay(alignment: .bottomLeading) {
-                // Show the *actual* delay (can exceed window) for diagnostics
+                // Show the *actual* delay and rate below the knob (diagnostics)
                 let now  = canon600(playbackManager.currentTime)
                 let play = canon600(playbackManager.getCurrentPlayingTime())
                 let actual = max(0, (now - play).seconds)
@@ -994,7 +1029,7 @@ struct ContentView: View {
                     .font(.system(size: 14))
                     .foregroundColor(.white)
                     .frame(width: 180, height: 20)
-                    .offset(x: barWidth * progress, y: 20)
+                    .offset(x: barWidth * displayProgress, y: 20)
             }
         }.frame(height: 50)
     }
