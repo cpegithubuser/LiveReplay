@@ -417,10 +417,10 @@ struct ContentView: View {
                             lastDragOffset = pipOffset
                         }
                 )
-                .padding(10)
+                .padding(20)
                 .frame(maxWidth: .infinity,
                        maxHeight: .infinity,
-                       alignment: .bottomTrailing)
+                       alignment: .topTrailing)
                 /// The two below hide the pip window
                 .opacity(showPiP ? 1 : 0)
                 .allowsHitTesting(showPiP) // allows a tap to flow through preview (to the next layer)
