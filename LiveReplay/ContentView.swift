@@ -885,6 +885,11 @@ struct ContentView: View {
             
             ZStack(alignment: .leading) {
                 WhiteCrosshatchBar()
+                // Right-side no-buffer zone: cover crosshatch so it doesn’t show there
+                Rectangle()
+                    .fill(.white)
+                    .frame(width: barWidth * max(1 - rightBound, 0), height: barHeight)
+                    .offset(x: barWidth * rightBound)
 //                Rectangle()
 //                    .fill(.gray)
 //                    .frame(width: max(barWidth * (maxProgress - available), 0)) // Adjust width
@@ -906,24 +911,35 @@ struct ContentView: View {
                   .fill(.gray)
                   .frame(width: barWidth * max(progressInWindow - leftBound, 0))
                   .offset(x: barWidth * leftBound)
-                
-                
-//                TimelineView(.animation(minimumInterval: 0.03)) { timeline in
-//                    let time = timeline.date.timeIntervalSinceReferenceDate
-//                    let dotCount = 10
-//                    let animationDuration = playbackManager.maxScrubbingDelay.seconds // match video duration
-//
-//                    ForEach(0..<dotCount, id: \.self) { i in
-//                        let phase = Double(i) / Double(dotCount)
-//                        let position = (time / animationDuration + phase).truncatingRemainder(dividingBy: 1)
-//                        let x = barWidth * (1 - CGFloat(position)) // right to left
-//
-//                        Circle()
-//                            .fill(Color.white.opacity(0.3))
-//                            .frame(width: 5, height: 5)
-//                            .offset(x: x)
-//                    }
-//                }
+
+                // Flowing dots: full bar, right-to-left at real-time rate. No dots in left no-buffer zone.
+                let periodSec = max(0.001, maxD)
+                let dotSize: CGFloat = 3
+                TimelineView(.animation(minimumInterval: 0.03)) { timeline in
+                    let time = timeline.date.timeIntervalSinceReferenceDate
+                    let dotCount = 12
+                    ZStack(alignment: .leading) {
+                        Color.clear
+                            .frame(width: barWidth, height: barHeight)
+                        ForEach(0..<dotCount, id: \.self) { i in
+                            let phase = Double(i) / Double(dotCount)
+                            let position = (time / periodSec + phase).truncatingRemainder(dividingBy: 1)
+                            let x = (1 - CGFloat(position)) * barWidth - dotSize / 2
+                            Circle()
+                                .fill(Color.black.opacity(0.35))
+                                .frame(width: dotSize, height: dotSize)
+                                .offset(x: x)
+                        }
+                    }
+                    .frame(width: barWidth, height: barHeight)
+                }
+                .frame(width: barWidth, height: barHeight)
+                .mask(
+                    HStack(spacing: 0) {
+                        Color.clear.frame(width: barWidth * leftBound)
+                        Rectangle().fill(Color.black).frame(width: barWidth * max(1 - leftBound, 0), height: barHeight)
+                    }
+                )
 
             }
             .allowsHitTesting(isScrubbableReady)
