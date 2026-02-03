@@ -29,6 +29,20 @@ struct ContentView: View {
     /// After scrub release, use raw progress for this long so knob doesn't slowly slide (snap window).
     @State private var lastScrubEndTime: Date? = nil
     private let scrubSnapWindowSeconds: TimeInterval = 0.25
+    /// When set, show the seconds label near the knob for 3s after scrub release; cleared after delay.
+    @State private var lastScrubReleaseTimeForLabel: Date? = nil
+    private let scrubLabelVisibleAfterReleaseSeconds: TimeInterval = 3.0
+    @State private var hideSecondsLabelWorkItem: DispatchWorkItem?
+    /// Show seconds label and schedule hide in 3s; each call restarts the 3s timer (cancels previous).
+    private func showSecondsLabelAndScheduleHide() {
+        hideSecondsLabelWorkItem?.cancel()
+        lastScrubReleaseTimeForLabel = Date()
+        let work = DispatchWorkItem {
+            withAnimation(.easeOut(duration: 1.0)) { lastScrubReleaseTimeForLabel = nil }
+        }
+        hideSecondsLabelWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + scrubLabelVisibleAfterReleaseSeconds, execute: work)
+    }
     @State private var available: CGFloat = 0
     @State private var lastDraggedProgress: CGFloat = 0
     @State private var dragStartTranslation: CGFloat = 0
@@ -79,6 +93,60 @@ struct ContentView: View {
                         .overlay(
                             GridOverlay(numberOfGridLines: numberOfGridLines)
                         )
+                        .overlay(alignment: .topLeading) {
+                            // Corner status: two lines (state / delay). BUFFERING when building to 2 sec; REPLAYING / PLAYER PAUSED with constant-width "X.X sec ago".
+                            let isBuffering = !isScrubbableReady && BufferManager.shared.segmentIndex > 0
+                            Group {
+                                if isBuffering {
+                                    Text("BUFFERING")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(.white)
+                                        .padding(6)
+                                        .background(Color.black.opacity(0.7))
+                                        .cornerRadius(6)
+                                } else if playbackManager.playerConstant.rate == 0,
+                                          ( !isScrubbing || playbackManager.playbackState == .paused ),
+                                          let d = effectiveDelaySeconds() {
+                                    let rounded = (d * 10).rounded() / 10
+                                    let delayStr = String(format: "%5.1f", rounded) + " sec ago"
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("PLAYER PAUSED")
+                                            .font(.subheadline.weight(.semibold))
+                                        Text(delayStr)
+                                            .font(.subheadline.weight(.semibold))
+                                            .monospacedDigit()
+                                    }
+                                    .foregroundColor(.white)
+                                    .padding(6)
+                                    .background(Color.black.opacity(0.7))
+                                    .cornerRadius(6)
+                                } else if let d = effectiveDelaySeconds() {
+                                    let rounded = (d * 10).rounded() / 10
+                                    let delayStr = String(format: "%5.1f", rounded) + " sec ago"
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("REPLAYING")
+                                            .font(.subheadline.weight(.semibold))
+                                        Text(delayStr)
+                                            .font(.subheadline.weight(.semibold))
+                                            .monospacedDigit()
+                                    }
+                                    .foregroundColor(.white)
+                                    .padding(6)
+                                    .background(Color.black.opacity(0.7))
+                                    .cornerRadius(6)
+                                } else if isScrubbableReady {
+                                    Text("LIVE")
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundColor(.red)
+                                        .padding(6)
+                                        .background(Color.black.opacity(0.7))
+                                        .cornerRadius(6)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .padding(10)
+                            .allowsHitTesting(false)
+                        }
                         .onAppear {
                             addPeriodicTimeObserver()
                             print("Adding periodic time observer")
@@ -104,6 +172,7 @@ struct ContentView: View {
                                     // Reverse 10s Button
                                     Button(action: {
                                         lastScrubEndTime = Date()  // snap: knob jumps instead of drifting
+                                        showSecondsLabelAndScheduleHide()  // show seconds, restart 3s fade timer
                                         playbackManager.rewind10Seconds()
                                     }) {
                                         Image(systemName: "gobackward.10")
@@ -116,7 +185,10 @@ struct ContentView: View {
                                     }
                                     
                                     // Play/Pause Button
-                                    Button(action: playbackManager.togglePlayPause) {
+                                    Button(action: {
+                                        showSecondsLabelAndScheduleHide()  // show seconds, restart 3s fade timer
+                                        playbackManager.togglePlayPause()
+                                    }) {
                                         Image(systemName: playbackManager.playerConstant.rate == 0 ? "play.fill" : "pause.fill")
                                             .resizable()
                                             .scaledToFit()
@@ -129,6 +201,7 @@ struct ContentView: View {
                                     // Forward 10s Button
                                     Button(action: {
                                         lastScrubEndTime = Date()  // snap: knob jumps instead of drifting
+                                        showSecondsLabelAndScheduleHide()  // show seconds, restart 3s fade timer
                                         playbackManager.forward10Seconds()
                                     }) {
                                         Image(systemName: "goforward.10")
@@ -537,25 +610,24 @@ struct ContentView: View {
 
     private func autoStartPlaybackIfNeeded() {
         let maxD = playbackManager.maxScrubbingDelay.seconds
-        let minD = playbackManager.minScrubbingDelay.seconds
         let boundaryEPS = 0.02      // small tolerance
         let preRoll    = 0.05       // compensate for startup overhead
 
         let now      = canon600(playbackManager.currentTime)
-        let play     = canon600(playbackManager.getCurrentPlayingTime())
         let earliest = canon600(BufferManager.shared.earliestPlaybackBufferTime)
 
         // Live measurements (seconds)
         let bufferedSpan = max(0, (now - earliest).seconds)
-        let currentDelay = max(0, (now - play).seconds)
 
         // Desired startup delay from the bookmark marker
         let desiredFromMarker = min(maxD, max(0, bookmarkedDelay.seconds))
 
+        // Only run for cold start (.unknown). Do not touch playback when user has explicitly paused or is playing.
         switch playbackManager.playbackState {
         case .playing:
             return
-
+        case .paused:
+            return  // user paused; stay paused until they press play
         case .unknown:
             guard BufferManager.shared.segmentIndex > 0 else { return }
             // Stay paused on cold start until we can honor the marker delay
@@ -566,23 +638,6 @@ struct ContentView: View {
                 CMTime(seconds: desiredFromMarker, preferredTimescale: 600)
             )
             let seekDelay = max(0, desiredFromMarker - preRoll)
-            let targetAbs = now - CMTime(seconds: seekDelay, preferredTimescale: 600)
-
-            playbackManager.pausePlayerTemporarily()
-            playbackManager.scrub(to: targetAbs, allowSeekOnly: true)
-            playbackManager.playPlayer()
-            return
-
-        case .paused:
-            // if we're within epsilon of the right edge of our window, resume
-            guard currentDelay >= maxD - boundaryEPS else { return }
-
-            // pin the target to maxScrubbingDelay (what we *want*), but clamp for the actual seek
-            playbackManager.delayTime = roundCMTimeToNearestTenth(
-                CMTime(seconds: maxD, preferredTimescale: 600)
-            )
-            let seekEdge = min(maxD, bufferedSpan)            // safe seek inside buffer
-            let seekDelay = max(0, seekEdge - preRoll)
             let targetAbs = now - CMTime(seconds: seekDelay, preferredTimescale: 600)
 
             playbackManager.pausePlayerTemporarily()
@@ -637,9 +692,11 @@ struct ContentView: View {
             return
         }
 
-        // Window bounds (for scrubber geometry only)
-        leftBound  = CGFloat(max(0, 1 - bufferedSpan / maxD))   // white-left
-        rightBound = CGFloat((maxD - minD) / maxD)              // white-right
+        // Window bounds (for scrubber geometry only). Freeze during scrub to avoid layout thrash and jitter at left edge.
+        if !isScrubbing {
+            leftBound  = CGFloat(max(0, 1 - bufferedSpan / maxD))   // white-left
+            rightBound = CGFloat((maxD - minD) / maxD)              // white-right
+        }
         isScrubbableReady = rightBound > leftBound
 
         // Raw, *unclamped* actual delay for display/diagnostics
@@ -652,10 +709,10 @@ struct ContentView: View {
         // Treat “near live” as undefined (or show LIVE) only for the unpinned display
         let liveEPS = 0.05
         if !isScrubbing {
+            displayDelayTime = (actualDelayRaw <= liveEPS) ? nil : actualDelayRaw
             let visual = max(1 - (actualDelayRaw / maxD), leftBound)
             progress = min(visual, 1)   // can be > rightBound, but never > 1
-            displayDelayTime = (actualDelayRaw <= liveEPS) ? nil : actualDelayRaw
-            // EMA smooth knob/label to reduce jitter; skip smoothing for a short window after scrub release so knob snaps instead of sliding
+            // EMA smooth knob to reduce jitter; after scrub release use raw progress for a short window so knob snaps
             if let t = lastScrubEndTime, Date().timeIntervalSince(t) < scrubSnapWindowSeconds {
                 smoothedProgress = progress  // snap: no EMA so no post-release slide
             } else {
@@ -711,9 +768,8 @@ struct ContentView: View {
             return displayDelayTime   // nil during cold start → UI shows LIVE/blank
         }
 
-        // else prefer pinned target when playing
-        if playbackManager.delayTime != .zero &&
-           playbackManager.playerConstant.rate != 0 {
+        // when playing, use pinned delay so display is stable; when paused, use actual delay so "sec ago" updates
+        if playbackManager.delayTime != .zero && playbackManager.playerConstant.rate != 0 {
             return playbackManager.delayTime.seconds
         }
         return displayDelayTime
@@ -733,10 +789,14 @@ struct ContentView: View {
 
         showAndScheduleHide()
         playbackManager.playerConstant.pause()
-        playbackManager.scrub(delay: delay)
+        playbackManager.scrubImmediate(delay: delay)
 
         // pin the playback target to the (clamped) delay so ±10/bookmark chase is exact
         playbackManager.delayTime = roundCMTimeToNearestTenth(delay)
+        // snap scrubber knob to bookmark position so it doesn't slowly slide
+        progress = progress(for: delay)
+        smoothedProgress = progress
+        lastScrubEndTime = Date()
         playbackManager.playPlayer()
     }
     
@@ -769,13 +829,11 @@ struct ContentView: View {
     private func showAndScheduleHide() {
       // cancel any pending hide
       hideWorkItem?.cancel()
-      // show now, with animation
-      withAnimation(.easeInOut(duration: 0.3)) {
-        showMarker = true
-      }
-      // schedule hide in 3s
+      // show immediately (no fade in)
+      showMarker = true
+      // schedule hide in 3s with fade out
       let work = DispatchWorkItem {
-        withAnimation(.easeInOut(duration: 0.3)) {
+        withAnimation(.easeOut(duration: 1.0)) {
           showMarker = false
         }
       }
@@ -918,6 +976,7 @@ struct ContentView: View {
                                     lastDraggedProgress = progress
                                     smoothedProgress = progress
                                     lastScrubEndTime = Date()  // snap window: use raw progress for a bit so knob doesn't slide
+                                    showSecondsLabelAndScheduleHide()  // show seconds, restart 3s fade timer
                                     dragStartTranslation = 0
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                         isScrubbing = false
@@ -954,8 +1013,8 @@ struct ContentView: View {
                 .opacity(showMarker ? 1 : 0)
                 .animation(
                     showMarker
-                    ? .easeIn(duration: 0.3)
-                    : .easeOut(duration: 1.0),
+                    ? .linear(duration: 0)   // appear immediately
+                    : .easeOut(duration: 1.0),  // fade out only
                     value: showMarker
                 )
                 .contentShape(Rectangle()) // enlarge hit-area
@@ -1001,16 +1060,25 @@ struct ContentView: View {
                 
             }
             .overlay(alignment: .bottomLeading) {
+                // Seconds near knob: show when scrubbing, ±10, or bookmark; fade out after 3s (same as marker)
+                let showSecondsNearKnob = isDragging || isScrubbing || (lastScrubReleaseTimeForLabel != nil) || showMarker
                 Group {
-                    if let d = effectiveDelaySeconds() {
-                        // Round to 0.1s so label doesn't flicker (e.g. 5.0 vs 5.1)
+                    if isScrubbing, let d = displayDelayTime {
                         let rounded = (d * 10).rounded() / 10
-                        Text("\(formatTimeDifference(rounded))s ago")
+                        let delayStr = String(format: "%5.1f", rounded) + "s ago"
+                        Text(delayStr)
                             .foregroundColor(.white)
+                            .monospacedDigit()
+                    } else if let d = effectiveDelaySeconds() {
+                        let rounded = (d * 10).rounded() / 10
+                        let delayStr = String(format: "%5.1f", rounded) + "s ago"
+                        Text(delayStr)
+                            .foregroundColor(.white)
+                            .monospacedDigit()
                     } else if isScrubbableReady {
                         Text("LIVE")
                             .fontWeight(.bold)
-                            .foregroundColor(.red)   // stays red now
+                            .foregroundColor(.red)
                     } else {
                         EmptyView()
                     }
@@ -1018,19 +1086,26 @@ struct ContentView: View {
                 .font(.system(size: 20))
                 .frame(width: 150, height: 20)
                 .offset(x: barWidth * displayProgress, y: -10)
+                .opacity(showSecondsNearKnob ? 1 : 0)
+                .animation(
+                    showSecondsNearKnob
+                    ? .linear(duration: 0)   // appear immediately
+                    : .easeOut(duration: 1.0),  // fade out only
+                    value: showSecondsNearKnob
+                )
             }
-            .overlay(alignment: .bottomLeading) {
-                // Show the *actual* delay and rate below the knob (diagnostics)
-                let now  = canon600(playbackManager.currentTime)
-                let play = canon600(playbackManager.getCurrentPlayingTime())
-                let actual = max(0, (now - play).seconds)
-
-                Text("\(formatTimeDifference(-actual)) \(playbackManager.playerConstant.rate)")
-                    .font(.system(size: 14))
-                    .foregroundColor(.white)
-                    .frame(width: 180, height: 20)
-                    .offset(x: barWidth * displayProgress, y: 20)
-            }
+//            .overlay(alignment: .bottomLeading) {
+//                // Show the *actual* delay and rate below the knob (diagnostics)
+//                let now  = canon600(playbackManager.currentTime)
+//                let play = canon600(playbackManager.getCurrentPlayingTime())
+//                let actual = max(0, (now - play).seconds)
+//
+//                Text("\(formatTimeDifference(-actual)) \(playbackManager.playerConstant.rate)")
+//                    .font(.system(size: 14))
+//                    .foregroundColor(.white)
+//                    .frame(width: 180, height: 20)
+//                    .offset(x: barWidth * displayProgress, y: 20)
+//            }
         }.frame(height: 50)
     }
     

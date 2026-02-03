@@ -40,7 +40,7 @@ final class CameraManager: NSObject, ObservableObject {
     var delegate: AVCaptureVideoDataOutputSampleBufferDelegate?
     
     //asset writer
-    let assetWriterInterval: Double = 1.0 // seconds
+    let assetWriterInterval: Double = 1.0 // seconds (segment length)
     lazy var segmentDuration = CMTimeMake(value: Int64(assetWriterInterval * 10), timescale: 10)
     
     var assetWriter: AVAssetWriter!
@@ -576,11 +576,12 @@ extension CameraManager {
 
         // --- NEW: GOP/keyframe + no B-frame hints ---
         let fps        = max(1, Int(round(selectedFrameRate)))          // expected fps
-        let gopSeconds = min(assetWriterInterval, 1.0)                  // ~1s GOP to match 1s segments
+        let gopSeconds = min(assetWriterInterval, 1.0)                  // GOP to match segment length
+        let gopFrames  = max(1, fps * Int(assetWriterInterval))         // keyframe interval in frames
         let compression: [String: Any] = [
             AVVideoExpectedSourceFrameRateKey: fps,                     // pacing hint
-            AVVideoMaxKeyFrameIntervalKey: fps,                         // ~1s in frames
-            AVVideoMaxKeyFrameIntervalDurationKey: gopSeconds,          // ~1s in seconds
+            AVVideoMaxKeyFrameIntervalKey: gopFrames,                    // match segment length in frames
+            AVVideoMaxKeyFrameIntervalDurationKey: gopSeconds,          // match segment length in seconds
             AVVideoAllowFrameReorderingKey: false,                      // avoid B-frame reorder at joins
             AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
         ]

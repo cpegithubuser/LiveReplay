@@ -62,6 +62,9 @@
         
         var playbackState: PlaybackState = .unknown
         
+        /// True while doing "seek then pause"; cleared on play. Prevents late seek completion from pausing after user hit play.
+        private var pendingPauseAfterSeek: Bool = false
+        
         init() {
             seeker = PlayerSeeker(player: playerConstant)
      //       playerConstant.automaticallyWaitsToMinimizeStalling = true
@@ -155,13 +158,27 @@
             }
         }
         
-        // Placeholder function for play/pause toggle
+        // Play/pause: pin delay for UI. On pause, seek to current time (zero tolerance) then pause to avoid frame jump.
         func togglePlayPause() {
             if playerConstant.rate == 0 {
+                pendingPauseAfterSeek = false
                 delayTime = roundCMTimeToNearestTenth(currentTime - getCurrentPlayingTime())
                 playPlayer()
             } else {
-                pausePlayer()
+                delayTime = roundCMTimeToNearestTenth(currentTime - getCurrentPlayingTime())
+                guard playerConstant.currentItem != nil else {
+                    pausePlayer()
+                    return
+                }
+                pendingPauseAfterSeek = true
+                let nowInItem = playerConstant.currentTime()
+                playerConstant.seek(to: nowInItem, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self = self, self.pendingPauseAfterSeek else { return }
+                        self.pendingPauseAfterSeek = false
+                        self.pausePlayer()
+                    }
+                }
             }
         }
         
@@ -559,7 +576,23 @@
             let target = currentTime - delay
             scrub(to: target, allowSeekOnly: true)
         }
-        
+
+        /// Instant jump to a delay (e.g. bookmark): no smooth seek, knob can snap in UI.
+        func scrubImmediate(delay: CMTime) {
+            let targetTime = currentTime - delay
+            guard let currentItem = playerConstant.currentItem else { return }
+            let itemPlayheadOffset = currentlyPlayingPlayerItemStartTime
+            let itemLocalRange = CMTimeRange(start: itemPlayheadOffset,
+                                             duration: currentItem.duration)
+            if itemLocalRange.containsTime(targetTime) {
+                let localSeekTime = CMTimeSubtract(targetTime, itemPlayheadOffset)
+                seeker?.cancelPendingSeeks()
+                seeker?.directlySeek(to: localSeekTime)
+            } else {
+                jump(to: targetTime, completion: nil)
+            }
+        }
+
         deinit {
             NotificationCenter.default.removeObserver(self, name: UIDevice.orientationDidChangeNotification, object: nil)
             print("Removed orientation observer.")
