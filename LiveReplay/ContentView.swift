@@ -873,8 +873,7 @@ struct ContentView: View {
             let displayProgress = isScrubbing ? progress : smoothedProgress
             
             ZStack(alignment: .leading) {
-                Rectangle()
-                    .fill(.white)
+                WhiteCrosshatchBar()
 //                Rectangle()
 //                    .fill(.gray)
 //                    .frame(width: max(barWidth * (maxProgress - available), 0)) // Adjust width
@@ -884,16 +883,16 @@ struct ContentView: View {
 //                    .frame(width: max(barWidth * (progress - available), 0)) // Adjust width
 //                    .offset(x: barWidth * available) // Move red bar to start at "available"
 
-                // scrubbable window background (gray)
+                // scrubbable window background (white)
                 Rectangle()
-                  .fill(.gray)
+                  .fill(.white)
                   .frame(width: barWidth * max(rightBound - leftBound, 0))
                   .offset(x: barWidth * leftBound)
 
-                // past portion in window (red)
+                // past portion in window (gray)
                 let progressInWindow = min(displayProgress, rightBound)
                 Rectangle()
-                  .fill(.red)
+                  .fill(.gray)
                   .frame(width: barWidth * max(progressInWindow - leftBound, 0))
                   .offset(x: barWidth * leftBound)
                 
@@ -925,7 +924,7 @@ struct ContentView: View {
                 if playbackManager.playerConstant.currentItem != nil
                     && BufferManager.shared.segmentIndex > 0 {
                     Circle()
-                        .fill(.red)
+                        .fill(.gray)
                         .frame(width: knobBaseDiameter, height: knobBaseDiameter)
                     /// Showing Drag Knob Only When Dragging
                         .scaleEffect(showPlayerControls || isDragging ? 1.5 : 1.0, anchor: .center)
@@ -1139,7 +1138,32 @@ func roundCMTimeToNearestTenth(_ time: CMTime) -> CMTime {
     return CMTimeMakeWithSeconds(roundedSeconds, preferredTimescale: time.timescale)
 }
 
-
+/// Light gray background with dark gray diagonal lines (top-right to bottom-left). For scrub bar background only.
+private struct WhiteCrosshatchBar: View {
+    private let spacing: CGFloat = 8
+    private let backgroundColor = Color(white: 0.85)
+    private let hatchColor = Color(white: 0.35)
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width
+            let h = g.size.height
+            let diag = sqrt(w * w + h * h)
+            let n = Int(diag / spacing) + 2
+            ZStack {
+                Rectangle().fill(backgroundColor)
+                ForEach(0..<n, id: \.self) { i in
+                    Rectangle()
+                        .fill(hatchColor)
+                        .frame(width: 1, height: diag * 2)
+                        .rotationEffect(.degrees(45))
+                        .offset(x: CGFloat(i) * spacing - diag / 2, y: 0)
+                }
+            }
+            .frame(width: w, height: h)
+            .clipped()
+        }
+    }
+}
 
 
 
