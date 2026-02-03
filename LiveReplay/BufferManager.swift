@@ -165,7 +165,8 @@ final class BufferManager: ObservableObject {
             pm.playerConstant.pause()
             pm.playerConstant.removeAllItems()
             pm.playbackState = .unknown
-            pm.delayTime = .zero            // ← clear the pinned target so UI won’t show “5s ago”
+            pm.delayTime = .zero
+            // ← clear the pinned target so UI won’t show “5s ago”
         }
     }
     

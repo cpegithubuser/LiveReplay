@@ -622,12 +622,22 @@ struct ContentView: View {
         // Desired startup delay from the bookmark marker
         let desiredFromMarker = min(maxD, max(0, bookmarkedDelay.seconds))
 
-        // Only run for cold start (.unknown). Do not touch playback when user has explicitly paused or is playing.
         switch playbackManager.playbackState {
         case .playing:
             return
         case .paused:
-            return  // user paused; stay paused until they press play
+            // At far left of scrubbable (max delay): auto-play so we don't run out of buffer
+            let play = canon600(playbackManager.getCurrentPlayingTime())
+            let currentDelay = max(0, (now - play).seconds)
+            if currentDelay >= maxD - boundaryEPS {
+                // Pin delay so "sec ago" doesn't jump to a smaller value when we start playing
+                playbackManager.delayTime = roundCMTimeToNearestTenth(
+                    CMTime(seconds: min(currentDelay, maxD), preferredTimescale: 600)
+                )
+                playbackManager.playPlayer()
+                showSecondsLabelAndScheduleHide()
+            }
+            return
         case .unknown:
             guard BufferManager.shared.segmentIndex > 0 else { return }
             // Stay paused on cold start until we can honor the marker delay
@@ -643,6 +653,7 @@ struct ContentView: View {
             playbackManager.pausePlayerTemporarily()
             playbackManager.scrub(to: targetAbs, allowSeekOnly: true)
             playbackManager.playPlayer()
+            showSecondsLabelAndScheduleHide()
         }
     }
 
