@@ -877,10 +877,6 @@ struct ContentView: View {
             ZStack(alignment: .leading) {
                 WhiteCrosshatchBar()
                 // Right-side no-buffer zone: cover crosshatch so it doesn’t show there
-                Rectangle()
-                    .fill(.white)
-                    .frame(width: barWidth * max(1 - rightBound, 0), height: barHeight)
-                    .offset(x: barWidth * rightBound)
 //                Rectangle()
 //                    .fill(.gray)
 //                    .frame(width: max(barWidth * (maxProgress - available), 0)) // Adjust width
@@ -890,18 +886,16 @@ struct ContentView: View {
 //                    .frame(width: max(barWidth * (progress - available), 0)) // Adjust width
 //                    .offset(x: barWidth * available) // Move red bar to start at "available"
 
-                // scrubbable window background (white)
-                Rectangle()
-                  .fill(.white)
-                  .frame(width: barWidth * max(rightBound - leftBound, 0))
-                  .offset(x: barWidth * leftBound)
-
-                // past portion in window (gray)
-                let progressInWindow = min(displayProgress, rightBound)
-                Rectangle()
-                  .fill(.gray)
-                  .frame(width: barWidth * max(progressInWindow - leftBound, 0))
-                  .offset(x: barWidth * leftBound)
+                if BufferManager.shared.segmentIndex > 0 && !playbackManager.playerConstant.items().isEmpty {
+                    Rectangle()
+                        .fill(.gray)
+                        .frame(width: barWidth * max(min(displayProgress, rightBound) - leftBound, 0), height: barHeight)
+                        .offset(x: barWidth * leftBound)
+                    Rectangle()
+                        .fill(.white)
+                        .frame(width: barWidth * max(1 - displayProgress, 0), height: barHeight)
+                        .offset(x: barWidth * displayProgress)
+                }
 
                 // Flowing dots: full bar, right-to-left at real-time rate. No dots in left no-buffer zone.
                 let periodSec = max(0.001, maxD)
