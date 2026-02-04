@@ -61,8 +61,8 @@ struct ContentView: View {
     /// Track the PiP’s cumulative offset
     @State private var pipOffset: CGSize = .zero
     @State private var lastDragOffset: CGSize = .zero
-    /// Track whether we want the video flipped
-    @State private var isFlipped: Bool = false
+    /// Mirror video when using front camera; no mirror for back camera.
+    private var isFlipped: Bool { cameraManager.cameraLocation == .front }
     
     /// For Gridlines. -1 is no lines
     @State private var numberOfGridLines: Int = -1
@@ -244,27 +244,18 @@ struct ContentView: View {
                                             .padding(5)
                                             .background(Circle().fill(Color.purple.opacity(0.5)))
                                     }
-                                    Button(action: { isFlipped.toggle() }) {
-                                        Image(systemName: isFlipped ? "flip.horizontal" : "flip.horizontal")
+                                    Button(action: {
+                                        // advance 0→1→2→3→0
+                                        numberOfGridLines = (numberOfGridLines < 9) ? (numberOfGridLines + 2) : -1
+                                    }) {
+                                        Image(systemName: numberOfGridLines>0 ? "grid.circle.fill" : "grid.circle")
                                             .resizable()
                                             .scaledToFit()
                                             .frame(width: 35, height: 35)
                                             .foregroundColor(.white)
                                             .padding(5)
                                             .background(Circle().fill(Color.purple.opacity(0.5)))
-                                   }
-//                                    Button(action: {
-//                                        // advance 0→1→2→3→0
-//                                        numberOfGridLines = (numberOfGridLines < 9) ? (numberOfGridLines + 2) : -1
-//                                    }) {
-//                                        Image(systemName: numberOfGridLines>0 ? "grid.circle.fill" : "grid.circle")
-//                                            .resizable()
-//                                            .scaledToFit()
-//                                            .frame(width: 35, height: 35)
-//                                            .foregroundColor(.white)
-//                                            .padding(5)
-//                                            .background(Circle().fill(Color.purple.opacity(0.5)))
-//                                    }
+                                    }
                                     .buttonStyle(NoTapAnimationStyle())
                                     Button(action: goToFixedDelay) {
                                         Image(systemName: "bookmark.circle")
