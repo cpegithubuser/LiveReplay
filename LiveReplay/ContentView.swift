@@ -94,50 +94,13 @@ struct ContentView: View {
                             GridOverlay(numberOfGridLines: numberOfGridLines)
                         )
                         .overlay(alignment: .topLeading) {
-                            // Corner status: two lines (state / delay). BUFFERING when building to 2 sec; REPLAYING / PLAYER PAUSED with constant-width "X.X sec ago".
+                            // BUFFERING / LIVE still top-left; REPLAYING/PLAYER PAUSED moved to bottom right
                             let isBuffering = !isScrubbableReady && BufferManager.shared.segmentIndex > 0
                             Group {
                                 if isBuffering {
                                     Text("BUFFERING")
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundColor(.white)
-                                        .padding(6)
-                                        .background(Color.black.opacity(0.7))
-                                        .cornerRadius(6)
-                                } else if playbackManager.playerConstant.rate == 0,
-                                          ( !isScrubbing || playbackManager.playbackState == .paused ),
-                                          let d = effectiveDelaySeconds() {
-                                    let rounded = (d * 10).rounded() / 10
-                                    let delayStr = String(format: "%5.1f", rounded) + " sec ago"
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("PLAYER PAUSED")
-                                            .font(.subheadline.weight(.semibold))
-                                        Text(delayStr)
-                                            .font(.subheadline.weight(.semibold))
-                                            .monospacedDigit()
-                                    }
-                                    .foregroundColor(.white)
-                                    .padding(6)
-                                    .background(Color.black.opacity(0.7))
-                                    .cornerRadius(6)
-                                } else if let d = effectiveDelaySeconds() {
-                                    let rounded = (d * 10).rounded() / 10
-                                    let delayStr = String(format: "%5.1f", rounded) + " sec ago"
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("REPLAYING")
-                                            .font(.subheadline.weight(.semibold))
-                                        Text(delayStr)
-                                            .font(.subheadline.weight(.semibold))
-                                            .monospacedDigit()
-                                    }
-                                    .foregroundColor(.white)
-                                    .padding(6)
-                                    .background(Color.black.opacity(0.7))
-                                    .cornerRadius(6)
-                                } else if isScrubbableReady {
-                                    Text("LIVE")
-                                        .font(.subheadline.weight(.bold))
-                                        .foregroundColor(.red)
                                         .padding(6)
                                         .background(Color.black.opacity(0.7))
                                         .cornerRadius(6)
@@ -165,10 +128,15 @@ struct ContentView: View {
                         }
                         .onDisappear { removePeriodicTimeObserver() }
                         .overlay(
-                            VStack {
-                                Spacer() // Push buttons to bottom
+                            VStack(spacing: 0) {
+                                Spacer().frame(minHeight: 100)
                                 VideoSeekerView(size)
-                                HStack(spacing: 20) { // Spacing between buttons
+                                Spacer()
+                                ZStack(alignment: .trailing) {
+                                    HStack(spacing: 0) {
+                                        Spacer().frame(width: 56)
+                                        Spacer(minLength: 0)
+                                    HStack(spacing: 20) {
                                     // Reverse 10s Button
                                     Button(action: {
                                         lastScrubEndTime = Date()  // snap: knob jumps instead of drifting
@@ -280,10 +248,19 @@ struct ContentView: View {
                                             .padding(5)
                                             .background(Circle().fill(Color.purple.opacity(0.5)))
                                     }
- }
-                                .padding(.bottom, 30)
+                                    }
+                                        Spacer(minLength: 0)
+                                        Spacer().frame(width: 140)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    cornerStatusView()
+                                        .padding(.trailing, 16)
+                                }
+                                .padding(.horizontal, 12)
+                                Spacer()
                             }
-                            , alignment: .bottom // Align buttons to bottom
+                            .padding(.bottom, 24)
+                            , alignment: .bottom
                         )
 //                    if let item = playbackManager.playerConstant.currentItem  {
 //                        VStack {
@@ -775,6 +752,48 @@ struct ContentView: View {
             return playbackManager.delayTime.seconds
         }
         return displayDelayTime
+    }
+
+    @ViewBuilder
+    private func cornerStatusView() -> some View {
+        if playbackManager.playerConstant.rate == 0,
+           ( !isScrubbing || playbackManager.playbackState == .paused ),
+           let d = effectiveDelaySeconds() {
+            let rounded = (d * 10).rounded() / 10
+            let delayStr = String(format: "%5.1f", rounded) + " sec ago"
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("PLAYER PAUSED")
+                    .font(.subheadline.weight(.semibold))
+                Text(delayStr)
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+            }
+            .foregroundColor(.white)
+            .padding(6)
+            .background(Color.black.opacity(0.7))
+            .cornerRadius(6)
+        } else if let d = effectiveDelaySeconds() {
+            let rounded = (d * 10).rounded() / 10
+            let delayStr = String(format: "%5.1f", rounded) + " sec ago"
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("REPLAYING")
+                    .font(.subheadline.weight(.semibold))
+                Text(delayStr)
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+            }
+            .foregroundColor(.white)
+            .padding(6)
+            .background(Color.black.opacity(0.7))
+            .cornerRadius(6)
+        } else if isScrubbableReady {
+            Text("LIVE")
+                .font(.subheadline.weight(.bold))
+                .foregroundColor(.red)
+                .padding(6)
+                .background(Color.black.opacity(0.7))
+                .cornerRadius(6)
+        }
     }
     
     func goToFixedDelay() {
