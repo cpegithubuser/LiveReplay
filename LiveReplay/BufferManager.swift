@@ -66,7 +66,18 @@ final class BufferManager: ObservableObject {
             /// Add new asset's duration for next next
             self.nextBufferStartTime = CMTimeAdd(self.nextBufferStartTime, asset.duration)
             
-            self.bufferTimeOffset = CMTimeSubtract(self.nextBufferStartTime, CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600))
+            // Re-sync offset to keep buffer-time aligned with wall clock.
+            // Always apply on the first segment (cold start / buffer reset).
+            // Otherwise only apply when the correction is small (normal jitter).
+            // After returning from background the correction is larger —
+            // skip it so the scrub bar doesn't jump.
+            let newOffset = CMTimeSubtract(self.nextBufferStartTime,
+                                           CMTime(seconds: CACurrentMediaTime(),
+                                                  preferredTimescale: 600))
+            let correction = CMTimeSubtract(newOffset, self.bufferTimeOffset).seconds
+            if segmentIndex == 0 || abs(correction) < 0.1 {
+                self.bufferTimeOffset = newOffset
+            }
             /// use compostiions
             
             /// We're going to loop through all of the offsets and add the AVAsset to the running AVComposition

@@ -33,6 +33,10 @@ final class CameraManager: NSObject, ObservableObject {
     // This is the number of frames that we dropped/skipped in captureoutput. We will drop a few when the session starts to eliminate dark frames.
     var droppedFrames: Int = 0
     
+    /// When true, the player will be resumed on the next captured frame
+    /// (set by the background→active handler so that playback and currentTime start advancing in sync).
+    var resumePlaybackOnFirstFrame: Bool = false
+    
     @Published var cameraSession: AVCaptureSession? = nil
     
     @Published var cameraAspectRatio: CGFloat = 4.0/3.0
@@ -547,15 +551,20 @@ extension CameraManager {
             if let writer = self.assetWriter, writer.status == .writing {
                 writer.cancelWriting()
             }
+            self.assetWriter = nil
+            self.videoInput = nil
+            self.startTime = nil
         }
     }
-    
-    /// Public call to start the asset writer. Finished the old one first if needed.
-    func initializeAssetWriter() {
+
+    /// Start the asset writer. Pass resetBuffer: false when resuming (e.g. from background) to keep the buffer and timeline intact.
+    func initializeAssetWriter(resetBuffer: Bool = true) {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
             self.droppedFrames = 0
-            BufferManager.shared.resetBuffer()
+            if resetBuffer {
+                BufferManager.shared.resetBuffer()
+            }
             self.createAssetWriter()
         }
     }

@@ -6,56 +6,51 @@
 //
 
 import SwiftUI
-import CoreMedia
 import AVFoundation
+import CoreMedia
 
 @main
 struct LiveReplayApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    
-    // state to remember when we backgrounded
     @State private var backgroundTime: CFTimeInterval = 0
     @State private var wasPlaying: Bool = false
-    
+
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
         .onChange(of: scenePhase) { newPhase in
-                    switch newPhase {
-                    case .background:
-                        // 1) Record the clock and pause everything
-                        backgroundTime = CACurrentMediaTime()
-                        wasPlaying    = PlaybackManager.shared.playerConstant.rate > 0
-                        PlaybackManager.shared.pausePlayer()
-                        // cancel the writer to avoid orphaned files
-                        CameraManager.shared.assetWriter?.cancelWriting()
+            switch newPhase {
+            case .background:
+                backgroundTime = CACurrentMediaTime()
+                wasPlaying = PlaybackManager.shared.playerConstant.rate > 0
+                PlaybackManager.shared.pausePlayer()
+                CameraManager.shared.cancelCaptureSession()
+                CameraManager.shared.cancelAssetWriter()
 
-                    case .active:
-                        // 2) Compute how long we were away
-                        let delta = CACurrentMediaTime() - backgroundTime
-                        let deltaCM = CMTime(seconds: delta, preferredTimescale: 600)
+            case .active:
+                // Subtract delta so currentTime (computed: wallClock + offset) stays where it was before background
+                let delta = CACurrentMediaTime() - backgroundTime
+                BufferManager.shared.bufferTimeOffset = CMTimeSubtract(
+                    BufferManager.shared.bufferTimeOffset,
+                    CMTime(seconds: delta, preferredTimescale: 600)
+                )
+                // Immediately update currentTime to reflect the adjusted offset
+                // (prevents stale value between now and first captured frame)
+                let now = CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600)
+                PlaybackManager.shared.currentTime = CMTimeAdd(now, BufferManager.shared.bufferTimeOffset)
 
-                        // 3) Shift your bufferTimeOffset so `currentTime` snaps back
-                        BufferManager.shared.bufferTimeOffset = CMTimeAdd(
-                          BufferManager.shared.bufferTimeOffset,
-                          deltaCM
-                        )
+                CameraManager.shared.initializeCaptureSession()
+                // resetBuffer: false keeps the existing buffer and timeline intact across background
+                CameraManager.shared.initializeAssetWriter(resetBuffer: false)
 
-                        // 4) Restart camera capture & asset writer
-                        CameraManager.shared.initializeCaptureSession()
-                        CameraManager.shared.initializeAssetWriter()
+                // Defer player resume until the first frame arrives so that
+                // playback and currentTime start advancing in sync (no scrub-bar drift).
+                CameraManager.shared.resumePlaybackOnFirstFrame = wasPlaying
 
-                        // 5) Resume playback only if we were playing before
-                        if wasPlaying {
-                          PlaybackManager.shared.playerConstant.play()
-                          PlaybackManager.shared.playbackState = .playing
-                        }
-
-                    default:
-                        break
-                    }
-                }
-
+            default:
+                break
+            }
+        }
     }
 }

@@ -691,9 +691,12 @@ struct ContentView: View {
             displayDelayTime = (actualDelayRaw <= liveEPS) ? nil : actualDelayRaw
             let visual = max(1 - (actualDelayRaw / maxD), leftBound)
             progress = min(visual, 1)   // can be > rightBound, but never > 1
-            // EMA smooth knob to reduce jitter; after scrub release use raw progress for a short window so knob snaps
+            // EMA smooth knob to reduce jitter; snap when delta is large (e.g. returning from background) or after scrub release
+            let snapThreshold: CGFloat = 0.05  // snap directly if knob is more than 5% off
             if let t = lastScrubEndTime, Date().timeIntervalSince(t) < scrubSnapWindowSeconds {
                 smoothedProgress = progress  // snap: no EMA so no post-release slide
+            } else if abs(progress - smoothedProgress) > snapThreshold {
+                smoothedProgress = progress  // snap: large jump (e.g. background return)
             } else {
                 lastScrubEndTime = nil
                 smoothedProgress += progressSmoothingAlpha * (progress - smoothedProgress)
