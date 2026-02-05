@@ -895,6 +895,7 @@ struct ContentView: View {
             
             ZStack(alignment: .leading) {
                 WhiteCrosshatchBar()
+                    .allowsHitTesting(false)
                 // Right-side no-buffer zone: cover crosshatch so it doesn’t show there
 //                Rectangle()
 //                    .fill(.gray)
