@@ -21,10 +21,6 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
             
-            /// lastest understanding of when now is
-            let currentMediaTime = CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600)
-            playbackManager.currentTime = CMTimeAdd(currentMediaTime, bufferManager.bufferTimeOffset)
-            
             // Print the width and height of the frame
             if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
                 let width = CVPixelBufferGetWidth(pixelBuffer)

@@ -19,7 +19,10 @@
 
         @Published var seeker: PlayerSeeker?
         
-        var currentTime: CMTime = .zero
+        /// Live "now" on the content timeline (0 = first frame of session). Computed on demand from system time + bufferTimeOffset.
+        var currentTime: CMTime {
+            CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600) + bufferManager.bufferTimeOffset
+        }
         var earliestScrubbingTime: CMTime = .zero
         var delayTime: CMTime = .zero
         
