@@ -19,9 +19,31 @@
 
         @Published var seeker: PlayerSeeker?
         
-        var currentTime: CMTime = .zero
+        /// The smoothed live edge of recorded content.
+        /// Content-time is the source of truth; interpolated between segment commits for smooth UI.
+        var liveEdge: CMTime { BufferManager.shared.liveEdge }
+
         var earliestScrubbingTime: CMTime = .zero
         var delayTime: CMTime = .zero
+
+        /// Short hold window to absorb AVPlayer's timebase snap when resuming.
+        /// While CACurrentMediaTime() < scrubberHoldUntil, the scrubber knob
+        /// stays at its previous position so the one-frame snap isn't visible.
+        var scrubberHoldUntil: CFTimeInterval = 0
+
+        func holdScrubberForSettle(_ seconds: Double = 0.25) {
+            scrubberHoldUntil = CACurrentMediaTime() + seconds
+        }
+
+        /// The delay (liveEdge − playhead) saved when the app backgrounds.
+        /// On resume, a seek re-establishes this delay so the knob stays put.
+        var resumeTargetDelay: CMTime = .zero
+
+        /// Closure provided by ContentView to perform a bookmark-style resume:
+        /// seeks to the given delay, snaps the scrubber knob, and starts playing.
+        /// This runs the same code path as the bookmark button, ensuring the knob
+        /// and delay label are instantly correct with no drift.
+        var resumeFromBackgroundHandler: ((CMTime) -> Void)?
         
         var maxScrubbingDelay = CMTimeMake(value: 30, timescale: 1)
         var minScrubbingDelay = CMTimeMake(value: 20, timescale: 10)
@@ -138,21 +160,21 @@
     //        return
             ///Calculate target time, if using that
             var targetTime = CMTimeSubtract(getCurrentPlayingTime(), CMTime(seconds: 10, preferredTimescale: 600))
-            targetTime = max(targetTime, currentTime - maxScrubbingDelay)
+            targetTime = max(targetTime, liveEdge - maxScrubbingDelay)
             /// Calculate delay time, if using that
             var currentDelay = delayTime
             if currentDelay == .zero {
-                currentDelay = currentTime - getCurrentPlayingTime()
+                currentDelay = liveEdge - getCurrentPlayingTime()
             }
-            let delay = min(currentDelay + CMTime(seconds: 10, preferredTimescale: 600), currentTime - BufferManager.shared.earliestPlaybackBufferTime, maxScrubbingDelay)
+            let delay = min(currentDelay + CMTime(seconds: 10, preferredTimescale: 600), liveEdge - BufferManager.shared.earliestPlaybackBufferTime, maxScrubbingDelay)
             printBug(.bugForwardRewind, "rewinding to delay: ", delay.seconds)
-            printBug(.bugForwardRewind, "now, earliestscrubbing: ", currentTime.seconds, earliestScrubbingTime.seconds, BufferManager.shared.earliestPlaybackBufferTime.seconds)
+            printBug(.bugForwardRewind, "now, earliestscrubbing: ", liveEdge.seconds, earliestScrubbingTime.seconds, BufferManager.shared.earliestPlaybackBufferTime.seconds)
             DispatchQueue.global(qos: .userInitiated).async {
                 self.pausePlayerTemporarily()
     //               seeker?.smoothlyJump(delay: delay)
     //            self.seeker?.smoothlyJump(targetTime: targetTime)
                 self.scrub(to: targetTime)
-                printBug(.bugForwardRewind, self.currentTime.seconds, self.getCurrentPlayingTime().seconds)
+                printBug(.bugForwardRewind, self.liveEdge.seconds, self.getCurrentPlayingTime().seconds)
                 self.delayTime = roundCMTimeToNearestTenth(delay)
                 self.playPlayerIfWasPlaying()
             }
@@ -162,10 +184,10 @@
         func togglePlayPause() {
             if playerConstant.rate == 0 {
                 pendingPauseAfterSeek = false
-                delayTime = roundCMTimeToNearestTenth(currentTime - getCurrentPlayingTime())
+                delayTime = roundCMTimeToNearestTenth(liveEdge - getCurrentPlayingTime())
                 playPlayer()
             } else {
-                delayTime = roundCMTimeToNearestTenth(currentTime - getCurrentPlayingTime())
+                delayTime = roundCMTimeToNearestTenth(liveEdge - getCurrentPlayingTime())
                 guard playerConstant.currentItem != nil else {
                     pausePlayer()
                     return
@@ -191,9 +213,9 @@
     //        return
             ///Calculate target time, if using that
             var targetTime = CMTimeAdd(getCurrentPlayingTime(), CMTime(seconds: 10, preferredTimescale: 600))
-            targetTime = min(targetTime, currentTime-minScrubbingDelay)
+            targetTime = min(targetTime, liveEdge-minScrubbingDelay)
             printBug(.bugForwardRewind, "getCurrentPlayingTime: ", getCurrentPlayingTime())
-            printBug(.bugForwardRewind, "currentTime: ", currentTime)
+            printBug(.bugForwardRewind, "liveEdge: ", liveEdge)
             printBug(.bugForwardRewind, "minScrubbingDelay: ", minScrubbingDelay)
             printBug(.bugForwardRewind, "currentlyPlayingPlayerItemStartTime: ", currentlyPlayingPlayerItemStartTime)
             printBug(.bugForwardRewind, "playerConstant.currentTime(): ", playerConstant.currentTime())
@@ -201,7 +223,7 @@
             /// Calculate delay time, if using that
             var currentDelay = delayTime
             if currentDelay == .zero {
-                currentDelay = currentTime - getCurrentPlayingTime()
+                currentDelay = liveEdge - getCurrentPlayingTime()
             }
             let delay = max(currentDelay - CMTime(seconds: 10, preferredTimescale: 600), minScrubbingDelay)
             printBug(.bugForwardRewind, "forwarding to delay: ", delay.seconds)
@@ -218,7 +240,7 @@
 
         func rewind10Seconds() {
             // Base delay = pinned target if set, else measured delay right now
-            let now600      = CMTimeConvertScale(currentTime,        timescale: 600, method: .default)
+            let now600      = CMTimeConvertScale(liveEdge,             timescale: 600, method: .default)
             let play600     = CMTimeConvertScale(getCurrentPlayingTime(), timescale: 600, method: .default)
             let earliest600 = CMTimeConvertScale(BufferManager.shared.earliestPlaybackBufferTime, timescale: 600, method: .default)
 
@@ -251,7 +273,7 @@
         
         func forward10Seconds() {
             // Base delay = pinned target if set, else measured delay right now
-            let now600      = CMTimeConvertScale(currentTime,        timescale: 600, method: .default)
+            let now600      = CMTimeConvertScale(liveEdge,             timescale: 600, method: .default)
             let play600     = CMTimeConvertScale(getCurrentPlayingTime(), timescale: 600, method: .default)
             let earliest600 = CMTimeConvertScale(BufferManager.shared.earliestPlaybackBufferTime, timescale: 600, method: .default)
 
@@ -450,20 +472,17 @@
         }
         
         func percentagePlayed() -> Double {
-    //        if let currentTime = currentTime,
-    //           let earliestPlaybackBufferTime = earliestPlaybackBufferTime {
-            earliestScrubbingTime = currentTime - maxScrubbingDelay
-    //        }
+            earliestScrubbingTime = liveEdge - maxScrubbingDelay
             let timePlayed = getCurrentPlayingTime().seconds - earliestScrubbingTime.seconds
             let totalTime = maxScrubbingDelay.seconds
-            printBug(.bugPercentagePlayed, "calculating progress", timePlayed / totalTime, bufferManager.earliestPlaybackBufferTime.seconds, earliestScrubbingTime.seconds, currentlyPlayingPlayerItemStartTime.seconds, playerConstant.currentTime().seconds, playerConstant.currentItem?.duration.seconds ?? "", getCurrentPlayingTime().seconds, currentTime.seconds, maxScrubbingDelay.seconds, currentPlayingAsset, delayTime)
+            printBug(.bugPercentagePlayed, "calculating progress", timePlayed / totalTime, bufferManager.earliestPlaybackBufferTime.seconds, earliestScrubbingTime.seconds, currentlyPlayingPlayerItemStartTime.seconds, playerConstant.currentTime().seconds, playerConstant.currentItem?.duration.seconds ?? "", getCurrentPlayingTime().seconds, liveEdge.seconds, maxScrubbingDelay.seconds, currentPlayingAsset, delayTime)
             return timePlayed / totalTime
         }
         
         /// Calculates the available scrubbing on the left (earlier time) side
         func percentageAvailable() -> Double {
             var available: Double = 0.0
-            available = max(0, 1 - (currentTime.seconds - bufferManager.earliestPlaybackBufferTime.seconds) / maxScrubbingDelay.seconds)
+            available = max(0, 1 - (liveEdge.seconds - bufferManager.earliestPlaybackBufferTime.seconds) / maxScrubbingDelay.seconds)
             return available
         }
         
@@ -573,13 +592,13 @@
 
         /// 2) Delay-based scrub (maps “now – delay” → absolute, then scrub)
         func scrub(delay: CMTime) {
-            let target = currentTime - delay
+            let target = liveEdge - delay
             scrub(to: target, allowSeekOnly: true)
         }
 
         /// Instant jump to a delay (e.g. bookmark): no smooth seek, knob can snap in UI.
         func scrubImmediate(delay: CMTime) {
-            let targetTime = currentTime - delay
+            let targetTime = liveEdge - delay
             guard let currentItem = playerConstant.currentItem else { return }
             let itemPlayheadOffset = currentlyPlayingPlayerItemStartTime
             let itemLocalRange = CMTimeRange(start: itemPlayheadOffset,
@@ -718,7 +737,7 @@
                     let bufferIndex = (bufferManager.segmentIndex + i) % bufferManager.maxBufferSize  // Iterate circularly
                     if let item = bufferManager.playerItemBuffer[bufferIndex] {
                         let memoryAddress = Unmanaged.passUnretained(item).toOpaque()  // Get Swift-style memory address
-                        printBug(.bugBuffer, "🔹 \(bufferIndex): \(describePlayerItemWithAssets(item))", bufferManager.timingBuffer[bufferIndex], currentTime)
+                        printBug(.bugBuffer, "🔹 \(bufferIndex): \(describePlayerItemWithAssets(item))", bufferManager.timingBuffer[bufferIndex], liveEdge)
                     }
                 }
             }

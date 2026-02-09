@@ -118,6 +118,26 @@ struct ContentView: View {
                                 snapshotAndOverlay()
                             }
                             print("Adding snapshot handler")
+                            // Resume-from-background handler: pin delay and play.
+                            // No seeking needed — the rate controller will smoothly
+                            // converge the player to match the target delay, and the
+                            // knob is pinned to delayTime so it never drifts.
+                            playbackManager.resumeFromBackgroundHandler = { delay in
+                                let targetDelaySec = min(
+                                    playbackManager.maxScrubbingDelay.seconds,
+                                    max(0, delay.seconds)
+                                )
+                                let d = CMTime(seconds: targetDelaySec, preferredTimescale: 600)
+
+                                // Pin target delay — knob + label will reflect this
+                                playbackManager.delayTime = roundCMTimeToNearestTenth(d)
+                                progress = progress(for: d)
+                                smoothedProgress = progress
+                                lastScrubEndTime = Date()
+
+                                // Just play — rate controller handles convergence
+                                playbackManager.playPlayer()
+                            }
                             markerProgress = progress(for: bookmarkedDelay)
                             lastMarkerProgress = markerProgress
                         }
@@ -549,8 +569,7 @@ struct ContentView: View {
             autoStartPlaybackIfNeeded()
 
             if !isScrubbing && playbackManager.delayTime != .zero {
-                //no adjust yet
-                //adjustPlaybackSpeedToReachDelayTime()
+                adjustPlaybackSpeedToReachDelayTime()
             }
         }
         if let t = playbackUpdateTimer {
@@ -581,7 +600,7 @@ struct ContentView: View {
         let boundaryEPS = 0.02      // small tolerance
         let preRoll    = 0.05       // compensate for startup overhead
 
-        let now      = canon600(playbackManager.currentTime)
+        let now      = canon600(playbackManager.liveEdge)
         let earliest = canon600(BufferManager.shared.earliestPlaybackBufferTime)
 
         // Live measurements (seconds)
@@ -628,7 +647,7 @@ struct ContentView: View {
     // MARK: - Scrubber fractions
     //
     // Target vs actual time (live buffer):
-    // - "Now" (currentTime) = latest time in the buffer; it moves forward as we record.
+    // - "Now" (liveEdge) = end of newest recorded content; advances only when new video arrives.
     // - Playback position (getCurrentPlayingTime()) = where we're playing in that timeline.
     // - Actual delay = now − play = how many seconds "ago" we're viewing (what the knob shows).
     // - Target delay (playbackManager.delayTime) = what we *want* the delay to be (e.g. "stay at 5s ago").
@@ -647,7 +666,7 @@ struct ContentView: View {
         let minD = playbackManager.minScrubbingDelay.seconds
         guard maxD > 0 else { return }
 
-        let now     = canon600(playbackManager.currentTime)
+        let now     = canon600(playbackManager.liveEdge)
         let oldest  = canon600(BufferManager.shared.earliestPlaybackBufferTime)
         let absPlay = canon600(playbackManager.getCurrentPlayingTime())
 
@@ -689,8 +708,19 @@ struct ContentView: View {
         let liveEPS = 0.05
         if !isScrubbing {
             displayDelayTime = (actualDelayRaw <= liveEPS) ? nil : actualDelayRaw
-            let visual = max(1 - (actualDelayRaw / maxD), leftBound)
-            progress = min(visual, 1)   // can be > rightBound, but never > 1
+
+            // When playing with a pinned delay, knob reflects the target (setpoint),
+            // not the measured delay. The rate controller drives the player to match.
+            // When paused or scrubbing, knob reflects the actual measured delay.
+            let delayForKnob: Double
+            if playbackManager.delayTime != .zero && playbackManager.playerConstant.rate != 0 {
+                delayForKnob = playbackManager.delayTime.seconds
+            } else {
+                delayForKnob = actualDelayRaw
+            }
+
+            let visual = max(1 - (delayForKnob / maxD), leftBound)
+            progress = min(visual, 1)
             // EMA smooth knob to reduce jitter; after scrub release use raw progress for a short window so knob snaps
             if let t = lastScrubEndTime, Date().timeIntervalSince(t) < scrubSnapWindowSeconds {
                 smoothedProgress = progress  // snap: no EMA so no post-release slide
@@ -709,7 +739,7 @@ struct ContentView: View {
         guard playbackManager.playerConstant.rate != 0,
               playbackManager.delayTime != .zero else { return }
 
-        let currentDelay = canon600(playbackManager.currentTime) - canon600(playbackManager.getCurrentPlayingTime())
+        let currentDelay = canon600(playbackManager.liveEdge) - canon600(playbackManager.getCurrentPlayingTime())
         let diff = playbackManager.delayTime - currentDelay
 
         let epsBig  = 0.5
@@ -993,7 +1023,7 @@ struct ContentView: View {
                                     
                                     // 3) convert to absolute target time (global timeline) and scrub (throttled)
                                     let targetDelay = (1 - clamped) * maxD
-                                    let targetTime = canon600(playbackManager.currentTime)
+                                    let targetTime = canon600(playbackManager.liveEdge)
                                     - CMTime(seconds: targetDelay, preferredTimescale: 600)
                                     
                                     let nowTS = Date().timeIntervalSince1970
@@ -1013,7 +1043,7 @@ struct ContentView: View {
                                         isScrubbing = false
                                         
                                         // Pin to “where we are now”
-                                        let now  = canon600(playbackManager.currentTime)
+                                        let now  = canon600(playbackManager.liveEdge)
                                         let play = canon600(playbackManager.getCurrentPlayingTime())
                                         var measured = now - play
                                         measured = CMTimeMaximum(.zero,
@@ -1127,7 +1157,7 @@ struct ContentView: View {
             }
 //            .overlay(alignment: .bottomLeading) {
 //                // Show the *actual* delay and rate below the knob (diagnostics)
-//                let now  = canon600(playbackManager.currentTime)
+//                let now  = canon600(playbackManager.liveEdge)
 //                let play = canon600(playbackManager.getCurrentPlayingTime())
 //                let actual = max(0, (now - play).seconds)
 //

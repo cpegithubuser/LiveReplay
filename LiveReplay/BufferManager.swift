@@ -40,11 +40,63 @@ final class BufferManager: ObservableObject {
 //        resetBuffer()
     }
 
-    /// The next asset to be added's start time. Save for next.
+    /// The live edge: buffer time where the next segment will start.
+    /// This is pure content-time — it only advances when new video is recorded.
     var nextBufferStartTime: CMTime = .zero
-    /// The time to add to current time to get to relative buffer time
-    var bufferTimeOffset: CMTime = .zero
     var earliestPlaybackBufferTime: CMTime = .zero
+
+    /// Wall-clock time when the last segment was committed (set inside the lock
+    /// alongside nextBufferStartTime so the pair is always consistent).
+    /// 0 means "no segments yet" — liveEdge skips interpolation in that case.
+    var lastSegmentCompletionWallTime: CFTimeInterval = 0
+
+    /// Max interpolation between segment commits (just above one segment interval).
+    private let liveEdgeInterpCap: Double = 1.1
+
+    /// When non-nil, liveEdge is frozen at this snapshot.
+    /// Cleared automatically when the unfrozen live edge catches up.
+    private var frozenLiveEdge: CMTime? = nil
+
+    /// When true, interpolation is disabled (unfrozen returns raw nextBufferStartTime).
+    /// Set on freeze; cleared when the first new segment commits.
+    private var interpolationSuspended: Bool = false
+
+    /// Computes the unfrozen (interpolated) live edge.
+    /// MUST only be called while the lock is already held.
+    private func _computeUnfrozenLiveEdgeLocked(now: CFTimeInterval) -> CMTime {
+        if interpolationSuspended { return nextBufferStartTime }
+        guard lastSegmentCompletionWallTime > 0 else { return nextBufferStartTime }
+        let elapsed = now - lastSegmentCompletionWallTime
+        let interp = min(max(elapsed, 0), liveEdgeInterpCap)
+        return CMTimeAdd(nextBufferStartTime, CMTime(seconds: interp, preferredTimescale: 600))
+    }
+
+    /// Smoothed live edge: content-time is the source of truth, with lightweight
+    /// wall-clock interpolation between segment commits so the UI doesn't pulse.
+    /// When frozen (app backgrounded), returns max(frozen, unfrozen) and auto-clears
+    /// the freeze once the unfrozen value catches up — guaranteeing the displayed
+    /// edge never jumps backward.
+    var liveEdge: CMTime {
+        lock.wait()
+        defer { lock.signal() }
+        let unfrozen = _computeUnfrozenLiveEdgeLocked(now: CACurrentMediaTime())
+        guard let frozen = frozenLiveEdge else { return unfrozen }
+        if unfrozen >= frozen {
+            frozenLiveEdge = nil   // caught up — clear freeze
+            return unfrozen
+        }
+        return frozen              // not caught up yet — hold
+    }
+
+    /// Freeze liveEdge at its current value and suspend interpolation.
+    /// Call this when the app is about to enter the background.
+    /// No new content → live edge doesn't move.
+    func freezeLiveEdgeNow() {
+        lock.wait()
+        frozenLiveEdge = _computeUnfrozenLiveEdgeLocked(now: CACurrentMediaTime())
+        interpolationSuspended = true
+        lock.signal()
+    }
     
     let lock = DispatchSemaphore(value: 1)
     
@@ -63,10 +115,10 @@ final class BufferManager: ObservableObject {
             /// Add start time, calculated from last cycle
             self.timingBuffer[bufferIndex] = self.nextBufferStartTime
             
-            /// Add new asset's duration for next next
+            /// Advance the live edge by this segment's actual recorded duration
             self.nextBufferStartTime = CMTimeAdd(self.nextBufferStartTime, asset.duration)
-            
-            self.bufferTimeOffset = CMTimeSubtract(self.nextBufferStartTime, CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600))
+            self.lastSegmentCompletionWallTime = CACurrentMediaTime()
+            self.interpolationSuspended = false  // resume interpolation; liveEdge auto-clears freeze
             /// use compostiions
             
             /// We're going to loop through all of the offsets and add the AVAsset to the running AVComposition
@@ -153,9 +205,11 @@ final class BufferManager: ObservableObject {
         segmentIndex = 0
         /// start time start over
         nextBufferStartTime = .zero
+        lastSegmentCompletionWallTime = CACurrentMediaTime()
+        frozenLiveEdge = nil           // clear any freeze on full reset
+        interpolationSuspended = false
         
         // Make “now” undefined until first frame is captured again
-        bufferTimeOffset = .zero
         earliestPlaybackBufferTime = .zero
 
         /// reset AVQueuePlayer

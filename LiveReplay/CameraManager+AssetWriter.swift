@@ -26,7 +26,7 @@ extension CameraManager: AVAssetWriterDelegate {
             }
             
             printBug(.bugAssetWriter, "segment:", bufferManager.segmentIndex+1)
-            printBug(.bugAssetWriter, "now time, current playing time", playbackManager.currentTime, playbackManager.getCurrentPlayingTime())
+            printBug(.bugAssetWriter, "now time, current playing time", playbackManager.liveEdge, playbackManager.getCurrentPlayingTime())
                     
             //  let asset = AVAsset(url: fileURL)
             printBug(.bugResourceLoader, "enter avurlasset loader")
@@ -46,6 +46,21 @@ extension CameraManager: AVAssetWriterDelegate {
             
             DispatchQueue.main.async {
                 self.playbackManager.playerConstant.insert(playerItem, after: nil)
+                
+                // Resume playback after the first post-background segment is enqueued.
+                // Uses the same code path as the bookmark button: seek to the
+                // saved delay, snap the knob, pin delayTime, then play.
+                if self.resumePlaybackOnFirstSegment {
+                    self.resumePlaybackOnFirstSegment = false
+                    let delay = self.playbackManager.resumeTargetDelay
+                    if let handler = self.playbackManager.resumeFromBackgroundHandler {
+                        handler(delay)
+                    } else {
+                        // Fallback if handler not set (shouldn't happen)
+                        self.playbackManager.playerConstant.play()
+                        self.playbackManager.playbackState = .playing
+                    }
+                }
             }
             
             printBug(.bugAssetWriter, "✅ [AVPlayer] Added valid player item.")
