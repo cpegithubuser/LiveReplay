@@ -12,12 +12,12 @@ import Combine
 /// A UIView whose backing layer is AVPlayerLayer. You can assign an AVPlayer to its `.player` property.
 final class PlayerUIView: UIView {
     override class var layerClass: AnyClass {
-        return AVPlayerLayer.self
+        AVPlayerLayer.self
     }
 
     /// Convenience accessor for the underlying AVPlayerLayer
     var playerLayer: AVPlayerLayer {
-        return layer as! AVPlayerLayer
+        layer as! AVPlayerLayer
     }
 
     /// Set this to your AVPlayer (or AVQueuePlayer) to render video
@@ -31,15 +31,20 @@ final class PlayerUIView: UIView {
         get { playerLayer.videoGravity }
         set { playerLayer.videoGravity = newValue }
     }
-}
 
+    /// Ensure the layer always matches the view’s bounds (critical with SwiftUI + UIScrollView)
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        playerLayer.frame = bounds
+    }
+}
 
 struct PlayerView: UIViewRepresentable {
     /// The AVPlayer (or AVQueuePlayer) that will drive playback
     var player: AVPlayer
 
     @ObservedObject var cameraManager = CameraManager.shared
-    
+
     /// Whether the video should be flipped horizontally
     var isFlipped: Bool
 
@@ -48,7 +53,7 @@ struct PlayerView: UIViewRepresentable {
     var maxZoom: CGFloat = 4.0
 
     func makeCoordinator() -> Coordinator {
-        return Coordinator(self)
+        Coordinator(self)
     }
 
     func makeUIView(context: Context) -> UIScrollView {
@@ -68,7 +73,7 @@ struct PlayerView: UIViewRepresentable {
 
         // 2) Create the PlayerUIView (backed by AVPlayerLayer) and add it into the scroll view
         let playerContainer = PlayerUIView()
-        playerContainer.videoGravity = .resizeAspect  // or .resizeAspectFill
+        playerContainer.videoGravity = .resizeAspect // or .resizeAspectFill
         playerContainer.player = player
         playerContainer.translatesAutoresizingMaskIntoConstraints = false
 
@@ -93,12 +98,18 @@ struct PlayerView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIScrollView, context: Context) {
-        // 1) If the SwiftUI side changes `player`, update the layer’s player
+        // Force layout so we don’t get stuck at 0×0 bounds during startup/foreground transitions
+        uiView.setNeedsLayout()
+        uiView.layoutIfNeeded()
+
         if let playerContainer = context.coordinator.playerView {
+            playerContainer.setNeedsLayout()
+            playerContainer.layoutIfNeeded()
+
+            // Keep AVPlayerLayer bound to the latest player instance
             playerContainer.player = player
 
-            // 2) Apply horizontal flip (scaleX = -1) if isFlipped == true,
-            //    otherwise reset to identity.
+            // Apply horizontal flip (mirror) only for front camera
             if isFlipped && cameraManager.cameraLocation == .front {
                 playerContainer.transform = CGAffineTransform(scaleX: -1, y: 1)
             } else {
@@ -106,15 +117,37 @@ struct PlayerView: UIViewRepresentable {
             }
         }
 
-        // You could also reset zoom back to 1.0 on certain conditions:
+        // Debug: log layer state when blank (throttled ~every 2s)
+        let now = CACurrentMediaTime()
+        if context.coordinator.lastLayerDebugLogTime == nil ||
+            (now - (context.coordinator.lastLayerDebugLogTime ?? 0)) >= 2.0 {
+
+            context.coordinator.lastLayerDebugLogTime = now
+
+            if let pv = context.coordinator.playerView {
+                let pm = PlaybackManager.shared.playerConstant
+                print("SCROLL:", uiView.frame, uiView.bounds)
+                print("PLAYER:", pv.playerLayer.player as Any)
+                print("QUEUE :", pm)
+                print("SAME? :", pv.playerLayer.player === pm)
+                print("FRAME :", pv.playerLayer.frame, "BOUNDS:", pv.bounds)
+                print("HIDDEN:", pv.isHidden, "ALPHA:", pv.alpha)
+                print("ITEM  :", pm.currentItem?.status.rawValue as Any,
+                      pm.currentItem?.presentationSize as Any)
+            }
+        }
+
+        // Optionally reset zoom on certain conditions:
         // uiView.setZoomScale(minZoom, animated: false)
     }
 
     // MARK: - Coordinator
 
-    class Coordinator: NSObject, UIScrollViewDelegate {
+    final class Coordinator: NSObject, UIScrollViewDelegate {
         var parent: PlayerView
         weak var playerView: PlayerUIView?
+        /// Throttle layer debug logs to ~every 2s
+        var lastLayerDebugLogTime: CFTimeInterval?
 
         init(_ parent: PlayerView) {
             self.parent = parent
@@ -122,7 +155,7 @@ struct PlayerView: UIViewRepresentable {
 
         /// Tell the scrollView which subview should be zoomed
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {
-            return playerView
+            playerView
         }
 
         /// After zooming, center the playerView if it’s smaller than the scrollView
