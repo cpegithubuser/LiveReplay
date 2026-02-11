@@ -9,64 +9,75 @@ import Foundation
 import AVFoundation
 
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
-    
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        
+
+    func captureOutput(_ output: AVCaptureOutput,
+                       didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection)
+    {
+        // ✅ Guard #1: bail immediately if we're backgrounding/shutting down/switching
+        if isBackgroundedOrShuttingDown { return }
+
         /// Drop a few frames because often they are dark from camera starting up
         if droppedFrames < 3 {
             droppedFrames += 1
             return
         }
-        
+
         writerQueue.async { [weak self] in
             guard let self = self else { return }
-            
-            // Print the width and height of the frame
+
+            // ✅ Guard #2: bail again inside writerQueue (handles "already enqueued" work)
+            if self.isBackgroundedOrShuttingDown { return }
+
+            // Optional debug (unchanged)
             if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
-                let width = CVPixelBufferGetWidth(pixelBuffer)
-                let height = CVPixelBufferGetHeight(pixelBuffer)
-                //      print("Frame dimensions: \(width)x\(height)",UIDevice.current.orientation.rawValue, cameraSession?.outputs.first?.connections.first?.videoOrientation.rawValue ?? -1, currentTime)
-                //            print("Frame dimensions: \(width)x\(height)",UIDevice.current.orientation.rawValue, cameraSession?.outputs.first?.connections.first?.videoOrientation.rawValue ?? -1, cameraLayer.connection?.videoOrientation.rawValue)
+                _ = CVPixelBufferGetWidth(pixelBuffer)
+                _ = CVPixelBufferGetHeight(pixelBuffer)
             } else {
                 print("Could not access pixel buffer.")
             }
-            
-            guard let writer = assetWriter,
-                  let input  = videoInput else {
-              initializeAssetWriter()
-              return
+
+            // If we don't have a writer/input, do NOT recreate while gated.
+            guard let writer = self.assetWriter,
+                  let input  = self.videoInput
+            else {
+                // Minimal behavior: if we're active, try to create; if gated, the guard above already returned.
+                self.createAssetWriter()
+                return
             }
 
+            // Start writer if needed
             if writer.status == .unknown {
-                // If the writer is in the unknown state, start writing
-                let success = assetWriter.startWriting()
+                let success = writer.startWriting()
                 assert(success)
-                startTime = sampleBuffer.presentationTimeStamp
-                assetWriter.startSession(atSourceTime: startTime)
-                /// Here we record the CACurrentMediaTime of the first frame of video. This first frame is going to be "zero" time so we
-                bufferManager.bufferTimeOffset = CMTimeSubtract(.zero, CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600))
-                
+                self.startTime = sampleBuffer.presentationTimeStamp
+                writer.startSession(atSourceTime: self.startTime)
+
+                // record "now" -> buffer timeline offset
+                self.bufferManager.bufferTimeOffset = CMTimeSubtract(
+                    .zero,
+                    CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600)
+                )
+
             } else if writer.status == .writing {
-                //       print("Asset writer already writing.")
+                // normal path
             } else {
-                print("Asset writer in unexpected state: \(assetWriter.status.rawValue)")
+                // cancelled/failed/completed etc
+                print("Asset writer in unexpected state: \(writer.status.rawValue)")
+                return
             }
-            
-            if startTime == nil {
-                let success = assetWriter.startWriting()
+
+            // Safety: in case startTime is nil even though status progressed
+            if self.startTime == nil {
+                let success = writer.startWriting()
                 assert(success)
-                startTime = sampleBuffer.presentationTimeStamp
-                assetWriter.startSession(atSourceTime: startTime)
+                self.startTime = sampleBuffer.presentationTimeStamp
+                writer.startSession(atSourceTime: self.startTime)
             }
-            
+
             if input.isReadyForMoreMediaData {
-              input.append(sampleBuffer)
+                input.append(sampleBuffer)
             }
-            
-   //         print(sampleBuffer.presentationTimeStamp)
-            
         }
     }
-    
-
 }

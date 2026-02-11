@@ -236,9 +236,10 @@ struct ContentView: View {
                                     }
                                     Button {
                                     //    CameraManager.shared.flipCameraCleanly()
-                                        cameraManager.cameraLocation = (cameraManager.cameraLocation == .back) ? .front : .back
+                                       // cameraManager.cameraLocation = (cameraManager.cameraLocation == .back) ? .front : .back
                                       //  CameraManager.shared.handleDeviceOrientationChange()
                           //              BufferManager.shared.resetBuffer()
+                                        CameraManager.shared.switchCameraCleanly()
                                     } label: {
                                         Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.camera")
                                             .resizable()

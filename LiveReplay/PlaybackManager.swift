@@ -83,6 +83,32 @@
     //        }
         }
         
+        
+        /// MINIMAL: stop playback and clear the AVQueuePlayer + internal bookkeeping.
+        /// Used for backgrounding and camera switches to keep recorder/player solid.
+        func stopAndClearQueue(_ completion: (() -> Void)? = nil) {
+            DispatchQueue.main.async {
+                self.playerConstant.pause()
+
+                // Remove queued items
+                self.playerConstant.removeAllItems()
+
+                // Also clear the currently-rendering item immediately
+                self.playerConstant.replaceCurrentItem(with: nil)
+
+                // Reset state that depends on queue/current item
+                self.playbackState = .unknown
+                self.delayTime = .zero
+
+                self.currentPlayingAsset = nil
+                self.currentlyPlayingAssetStartTime = .zero
+                self.currentlyPlayingPlayerItemStartTime = .zero
+
+                completion?()
+            }
+        }
+
+        
     //    /// -1 unkown, 0 was not playing before, 1 was playing before
     //    var wasPlayingBefore = -1
     //    func pausePlayerIfPlaying() {
