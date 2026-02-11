@@ -84,7 +84,6 @@ final class CameraManager: NSObject, ObservableObject {
         }
         didSet {
             updateAvailableDevices()
-            BufferManager.shared.resetBuffer()
             initializeAssetWriter()
         }
     }
@@ -305,7 +304,6 @@ final class CameraManager: NSObject, ObservableObject {
         cancelAssetWriter()
 
         // Clear replay pipeline
-        BufferManager.shared.resetBuffer()
         PlaybackManager.shared.stopAndClearQueue()
     }
 
@@ -324,8 +322,12 @@ final class CameraManager: NSObject, ObservableObject {
     /// Camera switch behavior: clear buffer + player queue; let existing didSet flows rebuild.
     func prepareForCameraSwitch() {
         droppedFrames = 0
-        BufferManager.shared.resetBuffer()
+
+        // Order matters:
+        // 1) Stop/clear queue first so the player releases any current item before we mutate buffer/compositions.
+        // 2) Then reset the buffer.
         PlaybackManager.shared.stopAndClearQueue()
+        BufferManager.shared.resetBuffer()
     }
     
     /// URL for debug segment writes (Documents/debug_segments/). Call clearDebugSegmentsFolder() when enabling.
@@ -608,7 +610,6 @@ extension CameraManager {
             guard !self.isBackgroundedOrShuttingDown else { return }
 
             self.droppedFrames = 0
-            BufferManager.shared.resetBuffer()
             self.createAssetWriter()
         }
     }
