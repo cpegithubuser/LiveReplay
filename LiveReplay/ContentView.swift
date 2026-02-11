@@ -15,6 +15,7 @@ struct ContentView: View {
     @ObservedObject var settings = SettingsManager.shared
     @ObservedObject var cameraManager = CameraManager.shared
     @State public var showSettings = false
+    @Environment(\.scenePhase) private var scenePhase
     
     var size: CGSize = (CGSize(width: 200, height: 2000))
     @State private var showPlayerControls: Bool = false
@@ -111,6 +112,7 @@ struct ContentView: View {
                             .allowsHitTesting(false)
                         }
                         .onAppear {
+                            // Avoid stacking multiple timers if the view re-appears.
                             addPeriodicTimeObserver()
                             print("Adding periodic time observer")
                             // Assign the snapshot handler from the UI to the manager
@@ -126,7 +128,12 @@ struct ContentView: View {
                             markerProgress = progress(for: bookmarkedDelay)
                             lastMarkerProgress = markerProgress
                         }
-                        .onDisappear { removePeriodicTimeObserver() }
+                        .onDisappear {
+                            removePeriodicTimeObserver()
+                            hideSecondsLabelWorkItem?.cancel()
+                            hideSecondsLabelWorkItem = nil
+                            lastScrubReleaseTimeForLabel = nil
+                        }
                         .overlay(
                             VStack(spacing: 0) {
                                 Spacer().frame(minHeight: 100)
@@ -398,6 +405,24 @@ struct ContentView: View {
         .background(Color.black)
         .ignoresSafeArea()
         .overlay(OnScreenLogOverlayView())
+        .onChange(of: scenePhase) { newPhase in
+            switch newPhase {
+            case .active:
+                // Returning to foreground: restart capture/writer and keep playback pipeline consistent.
+                CameraManager.shared.startAfterForeground()
+                // Ensure UI timers resume.
+                addPeriodicTimeObserver()
+            case .inactive:
+                break
+            case .background:
+                // Going to background: stop capture/writer and clear playback queue to avoid stale frames.
+                removePeriodicTimeObserver()
+                PlaybackManager.shared.stopAndClearQueue()
+                CameraManager.shared.stopForBackground()
+            @unknown default:
+                break
+            }
+        }
     }
     struct NoTapAnimationStyle: PrimitiveButtonStyle {
         func makeBody(configuration: Configuration) -> some View {

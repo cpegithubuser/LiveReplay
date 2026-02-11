@@ -293,18 +293,23 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// Called when app is moving to background. Minimal behavior: stop capture, stop writer, clear buffer + playback queue.
     func stopForBackground() {
+        // Gate immediately so any in-flight captureOutput work bails early.
         DispatchQueue.main.async {
             self.isBackgroundedOrShuttingDown = true
         }
 
-        // Stop capture session (no more buffers)
+        // Stop capture session (no more buffers). Some buffers may still be in-flight, so
+        // captureOutput must guard on isBackgroundedOrShuttingDown.
         cancelCaptureSession()
 
-        // Cancel writer and clear writer state
+        // Cancel writer and clear writer state.
         cancelAssetWriter()
 
-        // Clear replay pipeline
+        // Clear replay pipeline deterministically:
+        // 1) stop/clear the queue so the player releases items
+        // 2) reset the buffer (safe now that capture is gated)
         PlaybackManager.shared.stopAndClearQueue()
+        BufferManager.shared.resetBuffer()
     }
 
     /// Called when app returns to foreground. Minimal behavior: restart capture + writer.

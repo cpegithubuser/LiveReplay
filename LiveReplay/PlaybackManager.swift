@@ -306,11 +306,16 @@
 
         /// Hard reset the playback pipeline (used for backgrounding, camera switches, and session restarts).
         /// Safe to call repeatedly.
-        /// - Important: Executes on the main thread because AVQueuePlayer item mutation must be main-thread serialized with UI.
+        /// - Important: Runs on the main thread because AVQueuePlayer mutation must be serialized with UI.
         func stopAndClearQueue(completion: (() -> Void)? = nil) {
             DispatchQueue.main.async {
                 // Mark we are clearing so `playerItemDidChange` ignores late KVO callbacks during teardown.
                 self.isClearingQueue = true
+                defer {
+                    // Re-enable KVO-driven bookkeeping once teardown is done.
+                    self.isClearingQueue = false
+                    completion?()
+                }
 
                 // 1) Remove any time observers / loop state first (prevents callbacks after items are removed)
                 if let token = self.playbackBoundaryObserver {
@@ -323,10 +328,10 @@
                 // 2) Prevent late seek completions from pausing after we clear
                 self.pendingPauseAfterSeek = false
 
-                // 3) Cancel any pending seeker work so we don’t get seek-completions after teardown
+                // 3) Cancel any pending seeker work so we don’t get seek completions after teardown
                 self.seeker?.cancelPendingSeeks()
 
-                // 4) If a seek/jump is in-flight, drop flags so future logic doesn’t assume continuity
+                // 4) Drop flags so future logic doesn’t assume continuity
                 self.nextItemIsSeeking = false
                 self.isJumpingToItem = false
                 self.isJumping = false
@@ -340,15 +345,9 @@
                 self.currentlyPlayingAssetStartTime = .zero
                 self.currentlyPlayingPlayerItemStartTime = .zero
 
-                // Clear pinned delay + state so UI doesn’t show stale “X sec ago” after resets
+                // Clear pinned delay + state so UI won’t show stale “X sec ago” after resets
                 self.delayTime = .zero
                 self.playbackState = .unknown
-
-                // Allow KVO updates again on the next runloop turn (so any synchronous `currentItem=nil` changes don’t race)
-                DispatchQueue.main.async {
-                    self.isClearingQueue = false
-                    completion?()
-                }
             }
         }
         func pingPong() {
