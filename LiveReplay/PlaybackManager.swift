@@ -299,6 +299,43 @@
                 }
             }
         }
+
+        /// Hard reset the playback pipeline (used for backgrounding, camera switches, and session restarts).
+        /// Safe to call repeatedly.
+        /// - Important: Executes on the main thread because AVQueuePlayer item mutation must be main-thread serialized with UI.
+        func stopAndClearQueue(completion: (() -> Void)? = nil) {
+            DispatchQueue.main.async {
+                // 1) Remove any time observers / loop state first (prevents callbacks after items are removed)
+                if let token = self.playbackBoundaryObserver {
+                    self.playerConstant.removeTimeObserver(token)
+                    self.playbackBoundaryObserver = nil
+                }
+                self.isPlayingPingPong = false
+                self.isPlayingLoop = false
+
+                // 2) Prevent late seek completions from pausing after we clear
+                self.pendingPauseAfterSeek = false
+
+                // 3) If a seek/jump is in-flight, drop flags so future logic doesn’t assume continuity
+                self.nextItemIsSeeking = false
+                self.isJumpingToItem = false
+
+                // 4) Stop playback and clear the queue
+                self.playerConstant.pause()
+                self.playerConstant.removeAllItems()
+
+                // 5) Reset tracked timing state
+                self.currentPlayingAsset = nil
+                self.currentlyPlayingAssetStartTime = .zero
+                self.currentlyPlayingPlayerItemStartTime = .zero
+
+                // Clear pinned delay + state so UI doesn’t show stale “X sec ago” after resets
+                self.delayTime = .zero
+                self.playbackState = .unknown
+
+                completion?()
+            }
+        }
         func pingPong() {
             /// Remove any boundary observer (could be ping pong or loop or anything new)
             removePlaybackBoundaryObserver()
