@@ -67,6 +67,10 @@
         
         /// True while doing "seek then pause"; cleared on play. Prevents late seek completion from pausing after user hit play.
         private var pendingPauseAfterSeek: Bool = false
+
+        /// True only while we are clearing the AVQueuePlayer. Used to ignore late KVO callbacks (currentItem changes)
+        /// that can arrive after `removeAllItems()` during camera flips / background transitions.
+        private var isClearingQueue: Bool = false
         
         init() {
             seeker = PlayerSeeker(player: playerConstant)
@@ -305,6 +309,9 @@
         /// - Important: Executes on the main thread because AVQueuePlayer item mutation must be main-thread serialized with UI.
         func stopAndClearQueue(completion: (() -> Void)? = nil) {
             DispatchQueue.main.async {
+                // Mark we are clearing so `playerItemDidChange` ignores late KVO callbacks during teardown.
+                self.isClearingQueue = true
+
                 // 1) Remove any time observers / loop state first (prevents callbacks after items are removed)
                 if let token = self.playbackBoundaryObserver {
                     self.playerConstant.removeTimeObserver(token)
@@ -316,15 +323,19 @@
                 // 2) Prevent late seek completions from pausing after we clear
                 self.pendingPauseAfterSeek = false
 
-                // 3) If a seek/jump is in-flight, drop flags so future logic doesn’t assume continuity
+                // 3) Cancel any pending seeker work so we don’t get seek-completions after teardown
+                self.seeker?.cancelPendingSeeks()
+
+                // 4) If a seek/jump is in-flight, drop flags so future logic doesn’t assume continuity
                 self.nextItemIsSeeking = false
                 self.isJumpingToItem = false
+                self.isJumping = false
 
-                // 4) Stop playback and clear the queue
+                // 5) Stop playback and clear the queue
                 self.playerConstant.pause()
                 self.playerConstant.removeAllItems()
 
-                // 5) Reset tracked timing state
+                // 6) Reset tracked timing state
                 self.currentPlayingAsset = nil
                 self.currentlyPlayingAssetStartTime = .zero
                 self.currentlyPlayingPlayerItemStartTime = .zero
@@ -333,7 +344,11 @@
                 self.delayTime = .zero
                 self.playbackState = .unknown
 
-                completion?()
+                // Allow KVO updates again on the next runloop turn (so any synchronous `currentItem=nil` changes don’t race)
+                DispatchQueue.main.async {
+                    self.isClearingQueue = false
+                    completion?()
+                }
             }
         }
         func pingPong() {
@@ -454,6 +469,10 @@
         
         /// Look up the currentlyPlayingPlayerItemStartTime via associated object
         private func playerItemDidChange(to newItem: AVPlayerItem?) {
+            // During camera flips / background teardown we intentionally clear the queue.
+            // KVO can still fire (including `currentItem=nil` and then other transitions). Ignore those.
+            guard !isClearingQueue else { return }
+
             guard let item = newItem else {
                 printBug(.bugPlayerItemObserver, "⚠️ currentItem is nil")
                 return
