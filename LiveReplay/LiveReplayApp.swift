@@ -22,40 +22,34 @@ struct LiveReplayApp: App {
             ContentView()
         }
         .onChange(of: scenePhase) { newPhase in
-                    switch newPhase {
-                    case .background:
-                        // 1) Record the clock and pause everything
-                        backgroundTime = CACurrentMediaTime()
-                        wasPlaying    = PlaybackManager.shared.playerConstant.rate > 0
-                        PlaybackManager.shared.pausePlayer()
-                        // cancel the writer to avoid orphaned files
-                        CameraManager.shared.assetWriter?.cancelWriting()
+            switch newPhase {
+            case .background:
+                // Minimal + solid behavior:
+                // - stop player + clear AVQueuePlayer items
+                // - tear down capture session + asset writer
+                // - reset buffer (so no old-camera segments survive)
+                backgroundTime = CACurrentMediaTime()
+                wasPlaying = PlaybackManager.shared.playerConstant.rate > 0
 
-                    case .active:
-                        // 2) Compute how long we were away
-                        let delta = CACurrentMediaTime() - backgroundTime
-                        let deltaCM = CMTime(seconds: delta, preferredTimescale: 600)
+                PlaybackManager.shared.stopAndClearQueue()
+                BufferManager.shared.resetBuffer()
+                CameraManager.shared.stopForBackground()
 
-                        // 3) Shift your bufferTimeOffset so `currentTime` snaps back
-                        BufferManager.shared.bufferTimeOffset = CMTimeAdd(
-                          BufferManager.shared.bufferTimeOffset,
-                          deltaCM
-                        )
+            case .active:
+                // Minimal resume:
+                // - restart capture + writer
+                // - resume playback only if it was playing
+                CameraManager.shared.startAfterForeground()
 
-                        // 4) Restart camera capture & asset writer
-                        CameraManager.shared.initializeCaptureSession()
-                        CameraManager.shared.initializeAssetWriter()
-
-                        // 5) Resume playback only if we were playing before
-                        if wasPlaying {
-                          PlaybackManager.shared.playerConstant.play()
-                          PlaybackManager.shared.playbackState = .playing
-                        }
-
-                    default:
-                        break
-                    }
+                if wasPlaying {
+                    PlaybackManager.shared.playerConstant.play()
+                    PlaybackManager.shared.playbackState = .playing
                 }
+
+            default:
+                break
+            }
+        }
 
     }
 }
