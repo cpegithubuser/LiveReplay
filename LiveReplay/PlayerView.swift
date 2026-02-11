@@ -9,7 +9,26 @@ import SwiftUI
 import AVFoundation
 import Combine
 
-/// A UIView whose backing layer is AVPlayerLayer. You can assign an AVPlayer to its `.player` property.
+/// PlayerUIView
+///
+/// Why this is structured this way (pinch-to-zoom + background resume stability)
+///
+/// We previously had a version that tried to “fix” background/foreground layout issues by:
+///   - forcing layout (`setNeedsLayout` / `layoutIfNeeded`) during `updateUIView`, and
+///   - rebinding `playerLayer.player` on every `updateUIView`.
+///
+/// During a pinch gesture, UIScrollView continuously updates transforms and layout. In that window,
+/// UIKit can momentarily produce non-finite geometry (NaN/inf bounds/content sizes). If we then run
+/// `playerLayer.frame = bounds` with non-finite bounds we can end up with a black frame and/or a
+/// `CALayerInvalidGeometry` crash.
+///
+/// The fix is:
+///   1) Be defensive in `layoutSubviews` (only apply the layer frame when bounds are finite and > 0).
+///   2) Avoid fighting UIScrollView’s zoom transform by zooming a separate `zoomContainer` view.
+///      We keep mirroring on `PlayerUIView` so zoom and mirror transforms don’t compound unpredictably.
+///   3) Do NOT rebind the player on every update; only assign when the instance actually changes.
+///   4) If we need to recover from the “front camera after background -> invisible/0x0” case,
+///      request another layout pass ONLY when we are not currently zooming.
 final class PlayerUIView: UIView {
     override class var layerClass: AnyClass {
         return AVPlayerLayer.self
@@ -36,6 +55,7 @@ final class PlayerUIView: UIView {
     /// Must be defensive: during pinch-zoom / transitions UIKit can momentarily produce non-finite geometry.
     override func layoutSubviews() {
         super.layoutSubviews()
+        // During pinch-zoom / transitions, bounds can briefly be NaN/inf; never feed that into CALayer.
         let b = bounds
         guard b.width.isFinite, b.height.isFinite, b.width > 0, b.height > 0 else {
             return
@@ -81,6 +101,7 @@ struct PlayerView: UIViewRepresentable {
         scrollView.alwaysBounceHorizontal = false
         scrollView.alwaysBounceVertical = false
 
+        // Zoom `zoomContainer` (not the PlayerUIView) so UIScrollView's zoom transform doesn't conflict with mirroring.
         // 2) Create a zoom container that the scroll view will zoom.
         //    This prevents us from fighting UIScrollView's zoom transform when we also need mirroring.
         let zoomContainer = UIView()
@@ -123,6 +144,7 @@ struct PlayerView: UIViewRepresentable {
     func updateUIView(_ uiView: UIScrollView, context: Context) {
         guard let playerContainer = context.coordinator.playerView else { return }
 
+        // Rebinding the player every update can cause black frames during pinch-zoom; only rebind when the instance changes.
         // If the SwiftUI side changes `player`, update the layer’s player.
         // IMPORTANT: do not rebind on every update; it can cause black frames during pinch-zoom.
         if playerContainer.player !== player {
@@ -136,6 +158,8 @@ struct PlayerView: UIViewRepresentable {
             playerContainer.transform = .identity
         }
 
+        // Background/foreground (especially on front camera) can leave us briefly at 0x0; request another layout pass,
+        // but never force layout while zooming.
         // Fix the "front camera after background" invisible case without fighting pinch-zoom.
         // If we ever land with a 0-size layout during transitions, ask UIKit for another layout pass.
         // Only force layout when not zooming (zooming can momentarily yield non-finite geometry).
