@@ -76,30 +76,67 @@ final class BufferManager: ObservableObject {
                     
                     // If we've wrapped back to this offset, throw it away and start fresh
                     if bufferIndex == offset {
-                        runningComposition[offset] = AVMutableComposition()
-                        runningTrack[offset] = runningComposition[offset]!.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)!
-                        
+                        let newComp = AVMutableComposition()
+                        let newTrack = newComp.addMutableTrack(withMediaType: .video,
+                                                               preferredTrackID: kCMPersistentTrackID_Invalid)
+                        runningComposition[offset] = newComp
+                        if let newTrack {
+                            runningTrack[offset] = newTrack
+                        } else {
+                            runningTrack[offset] = nil
+                        }
+                    }
+
+                    // Append the new asset to that composition (safely)
+                    guard let comp = runningComposition[offset] else {
+                        print("⚠️ Missing runningComposition for offset \(offset)")
+                        continue
+                    }
+
+                    // Ensure we have a destination track
+                    let destTrack: AVMutableCompositionTrack
+                    if let existing = runningTrack[offset] {
+                        destTrack = existing
+                    } else if let created = comp.addMutableTrack(withMediaType: .video,
+                                                                 preferredTrackID: kCMPersistentTrackID_Invalid) {
+                        runningTrack[offset] = created
+                        destTrack = created
+                    } else {
+                        print("⚠️ Could not create destination track for offset \(offset)")
+                        continue
+                    }
+
+                    // Ensure the incoming asset has a video track
+                    guard let srcTrack = asset.tracks(withMediaType: .video).first else {
+                        print("⚠️ Incoming asset has no video track; skipping append")
+                        continue
+                    }
+
+                    // Skip obviously-invalid durations
+                    let dur = asset.duration
+                    guard dur.isNumeric, dur > .zero else {
+                        print("⚠️ Incoming asset has invalid duration \(dur); skipping append")
+                        continue
+                    }
+
+                    let insertionTime = comp.duration
+                    let fullRange = CMTimeRange(start: .zero, duration: dur)
+
+                    do {
+                        try destTrack.insertTimeRange(fullRange, of: srcTrack, at: insertionTime)
+                    } catch {
+                        print("⚠️ insertTimeRange failed at offset \(offset): \(error)")
+                        continue
                     }
                     
-                    // Append the new asset to that composition
-                    let comp = runningComposition[offset]!
-                    let videoTrack = comp.tracks(withMediaType: .video).first!
-                    //let audioTrack = comp.tracks(withMediaType: .audio).first!
-                    
-                    let insertionTime = comp.duration
-                    let fullRange = CMTimeRange(start: .zero, duration: asset.duration)
-                    
-                    try! videoTrack.insertTimeRange(fullRange,
-                                                    of: asset.tracks(withMediaType: .video).first!,
-                                                    at: insertionTime)
-                    //  try! audioTrack.insertTimeRange(fullRange,
-                    //                                  of: asset.tracks(withMediaType: .audio).first!,
-                    //                                 at: insertionTime)
-                    
-                    
-                    if let copiedComposition = self.runningComposition[offset]!.copy() as? AVComposition {
+                    if let copiedComposition = comp.copy() as? AVComposition {
                         self.playerItemBuffer[offset] = AVPlayerItem(asset: copiedComposition)
-                        objc_setAssociatedObject(self.playerItemBuffer[offset], &PlaybackManager.shared.playerItemStartTimeKey, NSValue(time: self.timingBuffer[offset] ?? .zero), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+                        if let item = self.playerItemBuffer[offset] {
+                            objc_setAssociatedObject(item,
+                                                     &PlaybackManager.shared.playerItemStartTimeKey,
+                                                     NSValue(time: self.timingBuffer[offset] ?? .zero),
+                                                     .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+                        }
                         
                         let ptr = Unmanaged.passUnretained(self.playerItemBuffer[offset]!).toOpaque()
                         printBug(.bugPlayerItemObserver, "🤖 setting assoc on composition item @ \(ptr) start: \(self.timingBuffer[offset] ?? .zero)")
@@ -140,25 +177,39 @@ final class BufferManager: ObservableObject {
 
     /// Blank out all running compositions and buffers
     func resetBuffer() {
+        lock.wait()
+        defer { lock.signal() }
+
         print("resetting buffer")
+
+        // Clear any existing compositions/tracks first to avoid stale references
+        runningComposition.removeAll(keepingCapacity: true)
+        runningTrack.removeAll(keepingCapacity: true)
+
         for offset in offsets {
-            self.runningComposition[offset] = AVMutableComposition()
-            self.runningComposition[offset]!.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)!
+            let comp = AVMutableComposition()
+            let track = comp.addMutableTrack(withMediaType: .video,
+                                             preferredTrackID: kCMPersistentTrackID_Invalid)
+            runningComposition[offset] = comp
+            if let track {
+                runningTrack[offset] = track
+            }
         }
+
         for i in 0..<maxBufferSize {
             playerItemBuffer[i] = nil
             timingBuffer[i]     = nil
         }
-        /// Start over at index 0
+
+        // Start over at index 0
         segmentIndex = 0
-        /// start time start over
         nextBufferStartTime = .zero
-        
+
         // Make “now” undefined until first frame is captured again
         bufferTimeOffset = .zero
         earliestPlaybackBufferTime = .zero
 
-        /// reset AVQueuePlayer
+        // Reset AVQueuePlayer
         print("resetting player")
         DispatchQueue.main.async {
             let pm = PlaybackManager.shared
