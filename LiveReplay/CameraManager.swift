@@ -29,6 +29,10 @@ final class CameraManager: NSObject, ObservableObject {
  //       qos: .userInteractive
         qos: .userInitiated
     )
+
+    /// Gate capture/writer while backgrounding or doing hard resets.
+    /// Minimal strategy: when true, captureOutput should early-return and writerQueue work should bail.
+    @Published var isBackgroundedOrShuttingDown: Bool = false
     
     // This is the number of frames that we dropped/skipped in captureoutput. We will drop a few when the session starts to eliminate dark frames.
     var droppedFrames: Int = 0
@@ -73,6 +77,9 @@ final class CameraManager: NSObject, ObservableObject {
     }
     @Published var cameraLocation: CameraPosition = .back {
         willSet {
+            // Minimal camera-switch behavior: clear replay pipeline (buffer + player queue),
+            // but do NOT do full background teardown.
+            prepareForCameraSwitch()
             cancelAssetWriter()
         }
         didSet {
@@ -279,8 +286,46 @@ final class CameraManager: NSObject, ObservableObject {
         updateAvailableDevices()
         printAllCaptureDeviceFormats()
         // no run addDeviceOrientationObserver. just suppoerting landscape right to start
+        // If you later want true device-orientation support, re-enable the observer:
         // addDeviceOrientationObserver()
         initializeCaptureSession()
+    }
+    // MARK: - Minimal background/foreground lifecycle
+
+    /// Called when app is moving to background. Minimal behavior: stop capture, stop writer, clear buffer + playback queue.
+    func stopForBackground() {
+        DispatchQueue.main.async {
+            self.isBackgroundedOrShuttingDown = true
+        }
+
+        // Stop capture session (no more buffers)
+        cancelCaptureSession()
+
+        // Cancel writer and clear writer state
+        cancelAssetWriter()
+
+        // Clear replay pipeline
+        BufferManager.shared.resetBuffer()
+        PlaybackManager.shared.stopAndClearQueue()
+    }
+
+    /// Called when app returns to foreground. Minimal behavior: restart capture + writer.
+    func startAfterForeground() {
+        DispatchQueue.main.async {
+            self.isBackgroundedOrShuttingDown = false
+        }
+
+        initializeCaptureSession()
+        initializeAssetWriter()
+    }
+
+    // MARK: - Camera switch behavior
+
+    /// Camera switch behavior: clear buffer + player queue; let existing didSet flows rebuild.
+    func prepareForCameraSwitch() {
+        droppedFrames = 0
+        BufferManager.shared.resetBuffer()
+        PlaybackManager.shared.stopAndClearQueue()
     }
     
     /// URL for debug segment writes (Documents/debug_segments/). Call clearDebugSegmentsFolder() when enabling.
@@ -544,9 +589,15 @@ extension CameraManager {
     func cancelAssetWriter() {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
-            if let writer = self.assetWriter, writer.status == .writing {
+            if let writer = self.assetWriter, writer.status == .writing || writer.status == .unknown {
                 writer.cancelWriting()
             }
+            self.assetWriter = nil
+            self.videoInput = nil
+            self.startTime = nil
+            self.initializationData = Data()
+            self.writerStarted = false
+            self.droppedFrames = 0
         }
     }
     
@@ -554,6 +605,8 @@ extension CameraManager {
     func initializeAssetWriter() {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
+            guard !self.isBackgroundedOrShuttingDown else { return }
+
             self.droppedFrames = 0
             BufferManager.shared.resetBuffer()
             self.createAssetWriter()
@@ -561,7 +614,8 @@ extension CameraManager {
     }
     
     /// Create an asset writer
-    private func createAssetWriter() {
+    func createAssetWriter() {
+        guard !isBackgroundedOrShuttingDown else { return }
         guard let session = cameraSession, session.isRunning else {
             print("⏳ createAssetWriter deferred: capture session not running")
             return
@@ -580,7 +634,7 @@ extension CameraManager {
         let gopFrames  = max(1, fps * Int(assetWriterInterval))         // keyframe interval in frames
         let compression: [String: Any] = [
             AVVideoExpectedSourceFrameRateKey: fps,                     // pacing hint
-            AVVideoMaxKeyFrameIntervalKey: gopFrames,                    // match segment length in frames
+            AVVideoMaxKeyFrameIntervalKey: gopFrames,                   // match segment length in frames
             AVVideoMaxKeyFrameIntervalDurationKey: gopSeconds,          // match segment length in seconds
             AVVideoAllowFrameReorderingKey: false,                      // avoid B-frame reorder at joins
             AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
