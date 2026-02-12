@@ -10,17 +10,6 @@ import AVFoundation
 
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     
-    /// Throttle writer re-inits requested from captureOutput to avoid thrashing during transitions.
-    private enum _WriterReinitGate {
-        static var lastRequest: CFTimeInterval = 0
-        static func shouldRequest(now: CFTimeInterval, minInterval: CFTimeInterval = 0.5) -> Bool {
-            if now - lastRequest >= minInterval {
-                lastRequest = now
-                return true
-            }
-            return false
-        }
-    }
     
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         
@@ -52,11 +41,9 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             guard let writer = self.assetWriter,
                   let input  = self.videoInput else {
                 // Writer is being torn down / not ready yet (e.g., camera flip or foreground restart).
-                // Minimal behavior: request a rebuild (throttled) and drop this frame.
-                let now = CACurrentMediaTime()
-                if _WriterReinitGate.shouldRequest(now: now) {
-                    self.initializeAssetWriter()
-                }
+                // IMPORTANT: Do NOT call initializeAssetWriter() here, because it resets the replay pipeline.
+                // Instead, attempt a lightweight writer rebuild and drop this frame.
+                self.recreateAssetWriterIfPossible(throttleSeconds: 0.5)
                 return
             }
 
@@ -78,12 +65,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 break
 
             case .failed, .cancelled:
-                // Writer is not usable. Request a rebuild (throttled) and drop frame.
-                let now = CACurrentMediaTime()
-                if _WriterReinitGate.shouldRequest(now: now) {
-                    self.cancelAssetWriter()
-                    self.initializeAssetWriter()
-                }
+                // Writer is not usable. Attempt a lightweight rebuild and drop this frame.
+                self.recreateAssetWriterIfPossible(throttleSeconds: 0.5)
                 return
 
             @unknown default:

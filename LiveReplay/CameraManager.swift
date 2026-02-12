@@ -59,6 +59,9 @@ final class CameraManager: NSObject, ObservableObject {
     
     var writerStarted = false
     
+    /// Throttle lightweight writer re-creation attempts (used by captureOutput self-heal).
+    private var lastWriterRecreateAttemptTime: CFTimeInterval = 0
+    
     /// When true, write each segment to disk as segment_N.mp4 in debugSegmentsFolder; folder is cleared on launch.
     var debugWriteSegmentsToDisk: Bool = false
     private static let debugSegmentsFolderName = "debug_segments"
@@ -91,7 +94,7 @@ final class CameraManager: NSObject, ObservableObject {
             updateAvailableDevices()
             initializeAssetWriter()
             // Once the new session/writer has been kicked off, allow mirroring updates again.
-            isCameraSwitchInProgress = false
+            // isCameraSwitchInProgress = false   // <--- REMOVED per instructions
         }
     }
     /// All AVCaptureDevices matching the current `cameraLocation`
@@ -341,8 +344,12 @@ final class CameraManager: NSObject, ObservableObject {
         // Order matters:
         // 1) Stop/clear queue first so the player releases any current item before we mutate buffer/compositions.
         // 2) Then reset the buffer.
-        PlaybackManager.shared.stopAndClearQueue {
+        // 3) Only then allow mirroring/connection changes again (prevents a brief flash on the outgoing video).
+        PlaybackManager.shared.stopAndClearQueue { [weak self] in
             BufferManager.shared.resetBuffer()
+            DispatchQueue.main.async {
+                self?.isCameraSwitchInProgress = false
+            }
         }
     }
     
@@ -622,13 +629,49 @@ extension CameraManager {
         }
     }
     
-    /// Public call to start the asset writer. Finished the old one first if needed.
+    /// Public call to (re)start the asset writer.
+    ///
+    /// IMPORTANT: This is a *pipeline* operation (used when settings change, camera flips, foregrounding, etc.).
+    /// It is allowed to reset state like `droppedFrames`.
     func initializeAssetWriter() {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
             guard !self.isBackgroundedOrShuttingDown else { return }
 
             self.droppedFrames = 0
+            self.createAssetWriter()
+        }
+    }
+
+    /// Lightweight writer recreation used by captureOutput "self-heal" paths.
+    ///
+    /// This intentionally does *not* reset the replay pipeline (no buffer reset / queue clear),
+    /// because calling those during foreground recovery can produce a "blank" player.
+    ///
+    /// Call this when `assetWriter`/`videoInput` are unexpectedly nil or unusable while capture is running.
+    func recreateAssetWriterIfPossible(throttleSeconds: Double = 0.5) {
+        writerQueue.async { [weak self] in
+            guard let self = self else { return }
+            guard !self.isBackgroundedOrShuttingDown else { return }
+
+            // Only attempt if we have a running capture session.
+            guard let session = self.cameraSession, session.isRunning else { return }
+
+            // Throttle to avoid rapid-fire recreation loops.
+            let now = CACurrentMediaTime()
+            if now - self.lastWriterRecreateAttemptTime < throttleSeconds {
+                return
+            }
+            self.lastWriterRecreateAttemptTime = now
+
+            // If we already have a usable writer+input, do nothing.
+            if let w = self.assetWriter,
+               self.videoInput != nil,
+               (w.status == .unknown || w.status == .writing) {
+                return
+            }
+
+            // Otherwise, rebuild writer objects without touching BufferManager / PlaybackManager.
             self.createAssetWriter()
         }
     }
