@@ -6,17 +6,18 @@
 //
 
 import SwiftUI
-import CoreMedia
 import AVFoundation
 
 @main
 struct LiveReplayApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    
-    // state to remember when we backgrounded
-    @State private var backgroundTime: CFTimeInterval = 0
+
+    // Remember whether we should resume playback after returning active
     @State private var wasPlaying: Bool = false
-    
+
+    // Avoid double-teardown when iOS delivers multiple background transitions
+    @State private var didTeardownForBackground: Bool = false
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -28,7 +29,9 @@ struct LiveReplayApp: App {
                 // - stop player + clear AVQueuePlayer items
                 // - tear down capture session + asset writer
                 // - reset buffer (so no old-camera segments survive)
-                backgroundTime = CACurrentMediaTime()
+                guard !didTeardownForBackground else { return }
+                didTeardownForBackground = true
+
                 wasPlaying = PlaybackManager.shared.playerConstant.rate > 0
 
                 PlaybackManager.shared.stopAndClearQueue()
@@ -39,6 +42,8 @@ struct LiveReplayApp: App {
                 // Minimal resume:
                 // - restart capture + writer
                 // - resume playback only if it was playing
+                didTeardownForBackground = false
+
                 CameraManager.shared.startAfterForeground()
 
                 if wasPlaying {
@@ -50,6 +55,5 @@ struct LiveReplayApp: App {
                 break
             }
         }
-
     }
 }
