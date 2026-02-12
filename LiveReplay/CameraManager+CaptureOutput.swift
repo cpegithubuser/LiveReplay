@@ -12,6 +12,11 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         
+        // Guard against late frames while backgrounding / switching cameras.
+        if isBackgroundedOrShuttingDown {
+            return
+        }
+        
         /// Drop a few frames because often they are dark from camera starting up
         if droppedFrames < 3 {
             droppedFrames += 1
@@ -20,6 +25,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         
         writerQueue.async { [weak self] in
             guard let self = self else { return }
+            guard !self.isBackgroundedOrShuttingDown else { return }
             
             // Print the width and height of the frame
             if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
@@ -33,8 +39,11 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             
             guard let writer = assetWriter,
                   let input  = videoInput else {
-              initializeAssetWriter()
-              return
+                // If we're active but writer/input are missing, try to recreate.
+                // If we're backgrounding/switching, just drop the frame.
+                guard !self.isBackgroundedOrShuttingDown else { return }
+                initializeAssetWriter()
+                return
             }
 
             if writer.status == .unknown {

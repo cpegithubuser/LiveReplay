@@ -307,15 +307,13 @@
         /// Hard reset the playback pipeline (used for backgrounding, camera switches, and session restarts).
         /// Safe to call repeatedly.
         /// - Important: Runs on the main thread because AVQueuePlayer mutation must be serialized with UI.
-        func stopAndClearQueue(completion: (() -> Void)? = nil) {
-            DispatchQueue.main.async {
+        ///
+        /// Accepts an optional completion so callers can sequence teardown (e.g. remove video first, then flip UI state)
+        /// without relying on timing.
+        func stopAndClearQueue(_ completion: (() -> Void)? = nil) {
+            let work = {
                 // Mark we are clearing so `playerItemDidChange` ignores late KVO callbacks during teardown.
                 self.isClearingQueue = true
-                defer {
-                    // Re-enable KVO-driven bookkeeping once teardown is done.
-                    self.isClearingQueue = false
-                    completion?()
-                }
 
                 // 1) Remove any time observers / loop state first (prevents callbacks after items are removed)
                 if let token = self.playbackBoundaryObserver {
@@ -348,7 +346,23 @@
                 // Clear pinned delay + state so UI won’t show stale “X sec ago” after resets
                 self.delayTime = .zero
                 self.playbackState = .unknown
+
+                // Re-enable KVO-driven bookkeeping once teardown is done.
+                self.isClearingQueue = false
+
+                completion?()
             }
+
+            if Thread.isMainThread {
+                work()
+            } else {
+                DispatchQueue.main.async(execute: work)
+            }
+        }
+
+        /// Backwards-compatible overload so existing call sites without a trailing closure keep compiling.
+        func stopAndClearQueue() {
+            stopAndClearQueue(nil)
         }
         func pingPong() {
             /// Remove any boundary observer (could be ping pong or loop or anything new)

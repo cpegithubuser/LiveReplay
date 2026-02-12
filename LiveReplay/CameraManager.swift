@@ -34,6 +34,10 @@ final class CameraManager: NSObject, ObservableObject {
     /// Minimal strategy: when true, captureOutput should early-return and writerQueue work should bail.
     @Published var isBackgroundedOrShuttingDown: Bool = false
     
+    /// True while a camera flip is in progress. Used to prevent transient mirroring/connection tweaks
+    /// from applying to the outgoing preview/player before the queue is cleared.
+    @Published var isCameraSwitchInProgress: Bool = false
+    
     // This is the number of frames that we dropped/skipped in captureoutput. We will drop a few when the session starts to eliminate dark frames.
     var droppedFrames: Int = 0
     
@@ -77,6 +81,7 @@ final class CameraManager: NSObject, ObservableObject {
     }
     @Published var cameraLocation: CameraPosition = .back {
         willSet {
+            isCameraSwitchInProgress = true
             // Minimal camera-switch behavior: clear replay pipeline (buffer + player queue),
             // but do NOT do full background teardown.
             prepareForCameraSwitch()
@@ -85,6 +90,8 @@ final class CameraManager: NSObject, ObservableObject {
         didSet {
             updateAvailableDevices()
             initializeAssetWriter()
+            // Once the new session/writer has been kicked off, allow mirroring updates again.
+            isCameraSwitchInProgress = false
         }
     }
     /// All AVCaptureDevices matching the current `cameraLocation`
@@ -267,6 +274,8 @@ final class CameraManager: NSObject, ObservableObject {
     
     @Published var mirroredReplay = false {
         didSet {
+            // Avoid a brief mirrored/unmirrored flash on the outgoing video while switching cameras.
+            guard !isCameraSwitchInProgress else { return }
             if let connection = cameraSession?.outputs.first?.connections.first {
                 if mirroredReplay == true {
                     connection.isVideoMirrored = true
@@ -308,8 +317,9 @@ final class CameraManager: NSObject, ObservableObject {
         // Clear replay pipeline deterministically:
         // 1) stop/clear the queue so the player releases items
         // 2) reset the buffer (safe now that capture is gated)
-        PlaybackManager.shared.stopAndClearQueue()
-        BufferManager.shared.resetBuffer()
+        PlaybackManager.shared.stopAndClearQueue {
+            BufferManager.shared.resetBuffer()
+        }
     }
 
     /// Called when app returns to foreground. Minimal behavior: restart capture + writer.
@@ -331,8 +341,9 @@ final class CameraManager: NSObject, ObservableObject {
         // Order matters:
         // 1) Stop/clear queue first so the player releases any current item before we mutate buffer/compositions.
         // 2) Then reset the buffer.
-        PlaybackManager.shared.stopAndClearQueue()
-        BufferManager.shared.resetBuffer()
+        PlaybackManager.shared.stopAndClearQueue {
+            BufferManager.shared.resetBuffer()
+        }
     }
     
     /// URL for debug segment writes (Documents/debug_segments/). Call clearDebugSegmentsFolder() when enabling.
@@ -498,6 +509,8 @@ extension CameraManager {
                 DispatchQueue.main.async {
                     self.cameraSession = nil
                 }
+                // If we were switching cameras, allow downstream mirroring updates once session is gone.
+                DispatchQueue.main.async { self.isCameraSwitchInProgress = false }
             }
         }
     }
@@ -506,6 +519,7 @@ extension CameraManager {
     func initializeCaptureSession() {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
+            guard !self.isBackgroundedOrShuttingDown else { return }
             
             // If there’s an existing session, tear it down
             if let session = self.cameraSession {
