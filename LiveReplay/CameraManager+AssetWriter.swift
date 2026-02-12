@@ -12,11 +12,26 @@ extension CameraManager: AVAssetWriterDelegate {
     
     func assetWriter(_ writer: AVAssetWriter, didOutputSegmentData segmentData: Data, segmentType: AVAssetSegmentType, segmentReport: AVAssetSegmentReport?) {
         printBug(.bugAssetWriter, "segmentType: \(segmentType.rawValue) - size: \(segmentData.count)")
+        
+        // Ignore any late segment callbacks after we’ve reset for background/camera switch.
+        // Also ensure this callback belongs to the *current* writer instance.
+        guard !isBackgroundedOrShuttingDown else {
+            printBug(.bugAssetWriter, "ignoring segment: backgrounded/shutting down")
+            return
+        }
+        guard self.assetWriter === writer else {
+            printBug(.bugAssetWriter, "ignoring segment: stale writer callback")
+            return
+        }
 
         switch segmentType {
         case .initialization:
             initializationData = segmentData
         case .separable:
+            guard !initializationData.isEmpty else {
+                printBug(.bugAssetWriter, "missing initialization segment; dropping separable")
+                return
+            }
             let mp4Data = initializationData + segmentData
             
             if debugWriteSegmentsToDisk, let folder = debugSegmentsFolderURL() {
