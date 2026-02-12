@@ -360,10 +360,6 @@
             }
         }
 
-        /// Backwards-compatible overload so existing call sites without a trailing closure keep compiling.
-        func stopAndClearQueue() {
-            stopAndClearQueue(nil)
-        }
         func pingPong() {
             /// Remove any boundary observer (could be ping pong or loop or anything new)
             removePlaybackBoundaryObserver()

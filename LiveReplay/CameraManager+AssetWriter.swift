@@ -14,12 +14,14 @@ extension CameraManager: AVAssetWriterDelegate {
         printBug(.bugAssetWriter, "segmentType: \(segmentType.rawValue) - size: \(segmentData.count)")
         
         // Ignore any late segment callbacks after we’ve reset for background/camera switch.
-        // Also ensure this callback belongs to the *current* writer instance.
         guard !isBackgroundedOrShuttingDown else {
             printBug(.bugAssetWriter, "ignoring segment: backgrounded/shutting down")
             return
         }
-        guard self.assetWriter === writer else {
+
+        // Also ensure this callback belongs to the *current* writer instance.
+        // NOTE: `assetWriter` is an IUO and may be nil after reset; never force-unwrap here.
+        guard let currentWriter = self.assetWriter, currentWriter === writer else {
             printBug(.bugAssetWriter, "ignoring segment: stale writer callback")
             return
         }
@@ -57,6 +59,7 @@ extension CameraManager: AVAssetWriterDelegate {
             guard let copied = comp.copy() as? AVComposition else { return }
             
             let playerItem = AVPlayerItem(asset: copied)
+            // Use the start time for *this* segment. `addNewAsset` will advance `nextBufferStartTime` for the next segment.
             objc_setAssociatedObject(playerItem, &playbackManager.playerItemStartTimeKey, NSValue(time: bufferManager.nextBufferStartTime), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             
             DispatchQueue.main.async {
