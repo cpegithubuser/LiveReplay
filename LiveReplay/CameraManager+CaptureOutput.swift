@@ -10,6 +10,18 @@ import AVFoundation
 
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     
+    /// Throttle writer re-inits requested from captureOutput to avoid thrashing during transitions.
+    private enum _WriterReinitGate {
+        static var lastRequest: CFTimeInterval = 0
+        static func shouldRequest(now: CFTimeInterval, minInterval: CFTimeInterval = 0.5) -> Bool {
+            if now - lastRequest >= minInterval {
+                lastRequest = now
+                return true
+            }
+            return false
+        }
+    }
+    
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         
         // Guard against late frames while backgrounding / switching cameras.
@@ -37,35 +49,45 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 print("Could not access pixel buffer.")
             }
             
-            guard let writer = assetWriter,
-                  let input  = videoInput else {
-                // If we're active but writer/input are missing, try to recreate.
-                // If we're backgrounding/switching, just drop the frame.
-                guard !self.isBackgroundedOrShuttingDown else { return }
-                initializeAssetWriter()
+            guard let writer = self.assetWriter,
+                  let input  = self.videoInput else {
+                // Writer is being torn down / not ready yet (e.g., camera flip or foreground restart).
+                // Minimal behavior: request a rebuild (throttled) and drop this frame.
+                let now = CACurrentMediaTime()
+                if _WriterReinitGate.shouldRequest(now: now) {
+                    self.initializeAssetWriter()
+                }
                 return
             }
 
-            if writer.status == .unknown {
-                // If the writer is in the unknown state, start writing
-                let success = assetWriter.startWriting()
+            switch writer.status {
+            case .unknown:
+                // Start the writer on the first frame we accept.
+                let success = writer.startWriting()
                 assert(success)
-                startTime = sampleBuffer.presentationTimeStamp
-                assetWriter.startSession(atSourceTime: startTime)
-                /// Here we record the CACurrentMediaTime of the first frame of video. This first frame is going to be "zero" time so we
-                bufferManager.bufferTimeOffset = CMTimeSubtract(.zero, CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600))
-                
-            } else if writer.status == .writing {
-                //       print("Asset writer already writing.")
-            } else {
-                print("Asset writer in unexpected state: \(assetWriter.status.rawValue)")
-            }
-            
-            if startTime == nil {
-                let success = assetWriter.startWriting()
-                assert(success)
-                startTime = sampleBuffer.presentationTimeStamp
-                assetWriter.startSession(atSourceTime: startTime)
+                self.startTime = sampleBuffer.presentationTimeStamp
+                writer.startSession(atSourceTime: self.startTime)
+
+                // Record CACurrentMediaTime of the first frame ("zero" on content timeline)
+                self.bufferManager.bufferTimeOffset = CMTimeSubtract(
+                    .zero,
+                    CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600)
+                )
+
+            case .writing:
+                break
+
+            case .failed, .cancelled:
+                // Writer is not usable. Request a rebuild (throttled) and drop frame.
+                let now = CACurrentMediaTime()
+                if _WriterReinitGate.shouldRequest(now: now) {
+                    self.cancelAssetWriter()
+                    self.initializeAssetWriter()
+                }
+                return
+
+            @unknown default:
+                return
             }
             
             if input.isReadyForMoreMediaData {
