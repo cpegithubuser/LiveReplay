@@ -43,6 +43,14 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 // Writer is being torn down / not ready yet (e.g., camera flip or foreground restart).
                 // IMPORTANT: Do NOT call initializeAssetWriter() here, because it resets the replay pipeline.
                 // Instead, attempt a lightweight writer rebuild and drop this frame.
+
+                // Only attempt rebuild if the capture session is actually running.
+                // During background/teardown the session may be nil/not running and rebuild attempts can
+                // create a writer that never receives frames, leading to a "blank" state.
+                guard let session = self.cameraSession, session.isRunning else {
+                    return
+                }
+
                 self.recreateAssetWriterIfPossible(throttleSeconds: 0.5)
                 return
             }
@@ -55,17 +63,25 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 self.startTime = sampleBuffer.presentationTimeStamp
                 writer.startSession(atSourceTime: self.startTime)
 
-                // Record CACurrentMediaTime of the first frame ("zero" on content timeline)
-                self.bufferManager.bufferTimeOffset = CMTimeSubtract(
-                    .zero,
-                    CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600)
-                )
+                // Record CACurrentMediaTime of the first frame ("zero" on content timeline).
+                // Only do this when starting a fresh timeline; if we recreate the writer mid-session,
+                // resetting bufferTimeOffset would jump the global timebase and can cause playback/UI weirdness.
+                if self.bufferManager.bufferTimeOffset == .zero && self.bufferManager.segmentIndex == 0 {
+                    self.bufferManager.bufferTimeOffset = CMTimeSubtract(
+                        .zero,
+                        CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600)
+                    )
+                }
 
             case .writing:
                 break
 
             case .failed, .cancelled:
                 // Writer is not usable. Attempt a lightweight rebuild and drop this frame.
+                // Only attempt rebuild if the capture session is running.
+                guard let session = self.cameraSession, session.isRunning else {
+                    return
+                }
                 self.recreateAssetWriterIfPossible(throttleSeconds: 0.5)
                 return
 

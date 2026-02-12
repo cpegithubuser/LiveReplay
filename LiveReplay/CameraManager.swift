@@ -672,6 +672,17 @@ extension CameraManager {
             }
 
             // Otherwise, rebuild writer objects without touching BufferManager / PlaybackManager.
+            // Clear any stale writer state first so we don't keep references to a failed/cancelled writer.
+            if let w = self.assetWriter, (w.status == .writing || w.status == .unknown) {
+                w.cancelWriting()
+            }
+
+            self.assetWriter = nil
+            self.videoInput = nil
+            self.startTime = nil
+            self.initializationData = Data()
+            self.writerStarted = false
+
             self.createAssetWriter()
         }
     }
