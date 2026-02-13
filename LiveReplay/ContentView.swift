@@ -62,6 +62,9 @@ struct ContentView: View {
     /// Track the PiP’s cumulative offset
     @State private var pipOffset: CGSize = .zero
     @State private var lastDragOffset: CGSize = .zero
+    /// Track the HUD pill’s cumulative offset
+    @State private var hudOffset: CGSize = .zero
+    @State private var lastHudDragOffset: CGSize = .zero
     /// Mirror video when using front camera; no mirror for back camera.
     private var isFlipped: Bool { cameraManager.cameraLocation == .front }
     
@@ -94,23 +97,6 @@ struct ContentView: View {
                         .overlay(
                             GridOverlay(numberOfGridLines: numberOfGridLines)
                         )
-                        .overlay(alignment: .topLeading) {
-                            // BUFFERING / LIVE still top-left; REPLAYING/PLAYER PAUSED moved to bottom right
-                            let isBuffering = !isScrubbableReady && BufferManager.shared.segmentIndex > 0
-                            Group {
-                                if isBuffering {
-                                    Text("BUFFERING")
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundColor(.white)
-                                        .padding(6)
-                                        .background(Color.black.opacity(0.7))
-                                        .cornerRadius(6)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            .padding(10)
-                            .allowsHitTesting(false)
-                        }
                         .onAppear {
                             // Avoid stacking multiple timers if the view re-appears.
                             addPeriodicTimeObserver()
@@ -134,141 +120,6 @@ struct ContentView: View {
                             hideSecondsLabelWorkItem = nil
                             lastScrubReleaseTimeForLabel = nil
                         }
-                        .overlay(
-                            VStack(spacing: 0) {
-                                Spacer().frame(minHeight: 100)
-                                VideoSeekerView(size)
-                                Spacer()
-                                ZStack(alignment: .trailing) {
-                                    HStack(spacing: 0) {
-                                        Spacer().frame(width: 56)
-                                        Spacer(minLength: 0)
-                                    HStack(spacing: 20) {
-                                    // Reverse 10s Button
-                                    Button(action: {
-                                        lastScrubEndTime = Date()  // snap: knob jumps instead of drifting
-                                        showSecondsLabelAndScheduleHide()  // show seconds, restart 3s fade timer
-                                        playbackManager.rewind10Seconds()
-                                    }) {
-                                        Image(systemName: "gobackward.10")
-                                            .resizable()
-                                            .scaledToFit()
-                                            .frame(width: 25, height: 25)
-                                            .foregroundColor(.white)
-                                            .padding(10)
-                                            .background(Circle().fill(Color.blue.opacity(0.5)))
-                                    }
-                                    
-                                    // Play/Pause Button
-                                    Button(action: {
-                                        showSecondsLabelAndScheduleHide()  // show seconds, restart 3s fade timer
-                                        playbackManager.togglePlayPause()
-                                    }) {
-                                        Image(systemName: playbackManager.playerConstant.rate == 0 ? "play.fill" : "pause.fill")
-                                            .resizable()
-                                            .scaledToFit()
-                                            .frame(width: 25, height: 25)
-                                            .foregroundColor(.white)
-                                            .padding(10)
-                                            .background(Circle().fill(Color.blue.opacity(0.5)))
-                                    }
-                                    
-                                    // Forward 10s Button
-                                    Button(action: {
-                                        lastScrubEndTime = Date()  // snap: knob jumps instead of drifting
-                                        showSecondsLabelAndScheduleHide()  // show seconds, restart 3s fade timer
-                                        playbackManager.forward10Seconds()
-                                    }) {
-                                        Image(systemName: "goforward.10")
-                                            .resizable()
-                                            .scaledToFit()
-                                            .frame(width: 25, height: 25)
-                                            .foregroundColor(.white)
-                                            .padding(10)
-                                            .background(Circle().fill(Color.blue.opacity(0.5)))
-                                    }
-                               // this is the frame by frame view
-                               //     ScrollingTickMarksView()
-                               //         .frame(width:300, height: 30)
-                                    // Fixed Dealy button
-
-//                                    Button(action: playbackManager.pingPong) {
-//                                        Image(systemName: playbackManager.isPlayingPingPong ?  "arrow.left.arrow.right.circle.fill" : "arrow.left.arrow.right.circle")
-//                                            .resizable()
-//                                            .scaledToFit()
-//                                            .frame(width: 35, height: 35)
-//                                            .foregroundColor(.white)
-//                                            .padding(5)
-//                                            .background(Circle().fill(Color.red.opacity(0.5)))
-//                                    }
-//                                    Button(action: playbackManager.loop) {
-//                                        Image(systemName: playbackManager.isPlayingLoop ? "arrow.clockwise.circle.fill" : "arrow.clockwise.circle")
-//                                            .resizable()
-//                                            .scaledToFit()
-//                                            .frame(width: 35, height: 35)
-//                                            .foregroundColor(.white)
-//                                            .padding(5)
-//                                            .background(Circle().fill(Color.red.opacity(0.5)))
-//                                    }
-                                    Button(action: { showPiP.toggle() }) {
-                                        Image(systemName: showPiP ? "pip.fill" : "pip")
-                                            .resizable()
-                                            .scaledToFit()
-                                            .frame(width: 35, height: 35)
-                                            .foregroundColor(.white)
-                                            .padding(5)
-                                            .background(Circle().fill(Color.purple.opacity(0.5)))
-                                    }
-                                    Button(action: {
-                                        // advance 0→1→2→3→0
-                                        numberOfGridLines = (numberOfGridLines < 9) ? (numberOfGridLines + 2) : -1
-                                    }) {
-                                        Image(systemName: numberOfGridLines>0 ? "grid.circle.fill" : "grid.circle")
-                                            .resizable()
-                                            .scaledToFit()
-                                            .frame(width: 35, height: 35)
-                                            .foregroundColor(.white)
-                                            .padding(5)
-                                            .background(Circle().fill(Color.purple.opacity(0.5)))
-                                    }
-                                    .buttonStyle(NoTapAnimationStyle())
-                                    Button(action: goToFixedDelay) {
-                                        Image(systemName: "bookmark.circle")
-                                            .resizable()
-                                            .scaledToFit()
-                                            .frame(width: 35, height: 35)
-                                            .foregroundColor(.white)
-                                            .padding(5)
-                                            .background(Circle().fill(Color.red.opacity(0.5)))
-                                    }
-                                    Button {
-                                    //    CameraManager.shared.flipCameraCleanly()
-                                        cameraManager.cameraLocation = (cameraManager.cameraLocation == .back) ? .front : .back
-                                      //  CameraManager.shared.handleDeviceOrientationChange()
-                          //              BufferManager.shared.resetBuffer()
-                                    } label: {
-                                        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.camera")
-                                            .resizable()
-                                            .scaledToFit()
-                                            .frame(width: 35, height: 35)
-                                            .foregroundColor(.white)
-                                            .padding(5)
-                                            .background(Circle().fill(Color.purple.opacity(0.5)))
-                                    }
-                                    }
-                                        Spacer(minLength: 0)
-                                        Spacer().frame(width: 140)
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    cornerStatusView()
-                                        .padding(.trailing, 16)
-                                }
-                                .padding(.horizontal, 12)
-                                Spacer()
-                            }
-                            .padding(.bottom, 24)
-                            , alignment: .bottom
-                        )
 //                    if let item = playbackManager.playerConstant.currentItem  {
 //                        VStack {
 //                            Text(playbackManager.describePlayerItem(item))
@@ -295,24 +146,6 @@ struct ContentView: View {
             if showSettings {
                 SettingsView(showSettings: $showSettings)
                     .statusBarHidden()
-            } else {
-                VStack{
-                    Spacer()
-                    HStack {
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Image(systemName: "gearshape.fill")
-                                .padding(7)
-                                .foregroundColor(Color.white)
-                                .background(Color.yellow)
-                                .cornerRadius(12)
-                                .padding(15)
-                        }
-                        Spacer()
-                    }
-
-                }
             }
             GeometryReader { geo in
             //                if geo.size.height > geo.size.width {
@@ -402,9 +235,35 @@ struct ContentView: View {
             }
 
         }
+        .overlay(alignment: .topLeading) {
+            liveReplayHudPill()
+                .padding(10)
+                .offset(hudOffset)
+                .onTapGesture(count: 2) {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                        hudOffset = .zero
+                        lastHudDragOffset = .zero
+                    }
+                }
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            hudOffset = CGSize(
+                                width: lastHudDragOffset.width + value.translation.width,
+                                height: lastHudDragOffset.height + value.translation.height
+                            )
+                        }
+                        .onEnded { _ in
+                            lastHudDragOffset = hudOffset
+                        }
+                )
+        }
         .background(Color.black)
         .ignoresSafeArea()
         .overlay(OnScreenLogOverlayView())
+        .safeAreaInset(edge: .bottom) {
+            bottomControlsInset()
+        }
         .onChange(of: scenePhase) { newPhase in
             switch newPhase {
             case .active:
@@ -424,6 +283,12 @@ struct ContentView: View {
             }
         }
     }
+    private struct HudState {
+        let stateText: String
+        let detailText: String?
+        let stateColor: Color
+    }
+
     struct NoTapAnimationStyle: PrimitiveButtonStyle {
         func makeBody(configuration: Configuration) -> some View {
             configuration.label
@@ -820,6 +685,259 @@ struct ContentView: View {
                 .cornerRadius(6)
         }
     }
+
+    @ViewBuilder
+    private func liveReplayHudPill() -> some View {
+        // Derive state + optional detail line.
+        let isBuffering = !isScrubbableReady && BufferManager.shared.segmentIndex > 0
+
+        let hud: HudState? = {
+            if isBuffering {
+                return HudState(stateText: "BUFFERING to enable replay", detailText: nil, stateColor: .white)
+            }
+
+            if playbackManager.playerConstant.rate == 0,
+               ( !isScrubbing || playbackManager.playbackState == .paused ),
+               let d = effectiveDelaySeconds() {
+                let rounded = (d * 10).rounded() / 10
+                let line = "PAUSED at " + String(format: "%4.1f", rounded) + "s ago"
+                return HudState(stateText: line, detailText: nil, stateColor: .white)
+            }
+
+            if let d = effectiveDelaySeconds() {
+                let rounded = (d * 10).rounded() / 10
+                let line = "REPLAYING " + String(format: "%4.1f", rounded) + "s ago"
+                return HudState(stateText: line, detailText: nil, stateColor: .white)
+            }
+
+            if isScrubbableReady {
+                return HudState(stateText: "LIVE", detailText: nil, stateColor: .red)
+            }
+
+            // Cold start with no segments: show nothing to avoid misleading state.
+            return nil
+        }()
+
+        // Always show the brand row, even on cold start or during view transitions.
+        let stateLine = hud?.stateText
+        let stateColor = hud?.stateColor ?? .white
+
+        VStack(alignment: .leading, spacing: 4) {
+            // Row 1: LIVE [LiveReplay icon] REPLAY
+            HStack(spacing: 0) {
+                Text("LIVE")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.white)
+
+                // Use a dedicated asset image set (NOT AppIcon) so it reliably loads at runtime.
+                // Create an Imageset named "LiveReplayHUDIcon" in Assets and add 1x/2x/3x PNGs.
+                Image("LiveReplayHUDIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 32, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                Text("REPLAY")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.white)
+            }
+
+            // Row 2: single-line state (keep height stable even when nil)
+            Text(stateLine ?? " ")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(stateColor)
+                .monospacedDigit()
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .opacity(stateLine == nil ? 0 : 1)
+        }
+        .frame(width: 210, alignment: .leading)
+        .padding(8)
+        .background(Color.black.opacity(0.7))
+        .cornerRadius(8)
+    }
+
+    @ViewBuilder
+    private func bottomControlsInset() -> some View {
+        // Keep controls anchored to the screen (not the PlayerView) so they don't jump during camera flips.
+        VStack(spacing: 0) {
+            // Scrub bar sits much closer to the bottom of the inset region.
+            VideoSeekerView(size)
+                .padding(.top, 0)
+
+            // Place the buttons exactly midway between the scrub bar and the bottom of the screen
+            // by using symmetric spacers within a fixed-height inset region.
+            Spacer(minLength: 0)
+
+            // Layout constants (kept fixed so the center group stays exactly centered on screen)
+            let gap: CGFloat = 37.5
+            let circleDiameter: CGFloat = 45
+
+            // 3-column layout:
+            // [flexible left column (left group aligned trailing)] [center group] [flexible right column (right group aligned leading)]
+            // Left/right columns have equal width, so the center group stays perfectly centered.
+            HStack(spacing: 0) {
+                // Left side column: keep left group near center (not pinned to the screen edge)
+                HStack(spacing: 20) {
+                    Spacer(minLength: 0)
+
+                    Button { showSettings = true } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Color.black.opacity(0.45))
+                                .frame(width: circleDiameter, height: circleDiameter)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                                )
+                            Image(systemName: "gearshape.fill")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 24, height: 24) // slightly bigger
+                                .foregroundColor(.white)
+                        }
+                    }
+
+                    Button(action: { showPiP.toggle() }) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.black.opacity(0.45))
+                                .frame(width: circleDiameter, height: circleDiameter)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                                )
+                            Image(systemName: showPiP ? "pip.fill" : "pip")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 26, height: 26) // smaller
+                                .foregroundColor(.white)
+                        }
+                    }
+
+                    Button(action: {
+                        numberOfGridLines = (numberOfGridLines < 9) ? (numberOfGridLines + 2) : -1
+                    }) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.black.opacity(0.45))
+                                .frame(width: circleDiameter, height: circleDiameter)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                                )
+                            Image(systemName: numberOfGridLines > 0 ? "grid.circle.fill" : "grid.circle")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 26, height: 26) // smaller
+                                .foregroundColor(.white)
+                        }
+                    }
+                    .buttonStyle(NoTapAnimationStyle())
+
+                    Button {
+                        cameraManager.cameraLocation = (cameraManager.cameraLocation == .back) ? .front : .back
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Color.black.opacity(0.45))
+                                .frame(width: circleDiameter, height: circleDiameter)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                                )
+                            Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90.camera")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 26, height: 26) // smaller
+                                .foregroundColor(.white)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.trailing, gap)
+
+                // Center group: exactly centered on screen
+                HStack(spacing: 20) {
+                    Button(action: {
+                        lastScrubEndTime = Date()
+                        showSecondsLabelAndScheduleHide()
+                        playbackManager.rewind10Seconds()
+                    }) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.blue.opacity(0.5))
+                                .frame(width: circleDiameter, height: circleDiameter)
+                            Image(systemName: "gobackward.10")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 27, height: 27) // slightly bigger
+                                .foregroundColor(.white)
+                        }
+                    }
+                    Button(action: {
+                        showSecondsLabelAndScheduleHide()
+                        playbackManager.togglePlayPause()
+                    }) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.blue.opacity(0.5))
+                                .frame(width: circleDiameter, height: circleDiameter)
+                            Image(systemName: playbackManager.playerConstant.rate == 0 ? "play.fill" : "pause.fill")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 25, height: 25) // unchanged
+                                .foregroundColor(.white)
+                        }
+                    }
+                    Button(action: {
+                        lastScrubEndTime = Date()
+                        showSecondsLabelAndScheduleHide()
+                        playbackManager.forward10Seconds()
+                    }) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.blue.opacity(0.5))
+                                .frame(width: circleDiameter, height: circleDiameter)
+                            Image(systemName: "goforward.10")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 27, height: 27) // slightly bigger
+                                .foregroundColor(.white)
+                        }
+                    }
+                }
+
+                // Right side column: keep right group near center (not pinned to the screen edge)
+                HStack(spacing: 20) {
+                    Button(action: goToFixedDelay) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.black.opacity(0.45))
+                                .frame(width: circleDiameter, height: circleDiameter)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                                )
+                            Image(systemName: "bookmark.circle")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 26, height: 26) // smaller
+                                .foregroundColor(.white)
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, gap)
+            }
+            .frame(maxWidth: .infinity)
+            // Status box overlay removed: moved to HUD pill at top-left
+
+            Spacer(minLength: 0)
+        }
+        // Fixed region height gives a stable midpoint for the buttons.
+        .frame(height: 90)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
+        .background(Color.clear)
+    }
     
     func goToFixedDelay() {
         playbackManager.removePlaybackBoundaryObserver()
@@ -893,7 +1011,7 @@ struct ContentView: View {
         var pendingUpdate: CGFloat = 0
         GeometryReader { proxy in
             let totalWidth = proxy.size.width
-            let barWidth = totalWidth * 0.8
+            let barWidth = totalWidth * 0.9
             let margin = (totalWidth - barWidth) / 2
             let barHeight: CGFloat = 12
             let cornerRadius: CGFloat = barHeight / 2
@@ -1229,4 +1347,3 @@ private struct WhiteCrosshatchBar: View {
 #Preview {
     ContentView()
 }
-
