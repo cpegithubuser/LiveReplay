@@ -1007,7 +1007,6 @@ struct ContentView: View {
     @ViewBuilder
     func VideoSeekerView(_ videoSize: CGSize) -> some View {
         // Variables to track time and pending updates
-        
         var pendingUpdate: CGFloat = 0
         GeometryReader { proxy in
             let totalWidth = proxy.size.width
@@ -1015,18 +1014,26 @@ struct ContentView: View {
             let margin = (totalWidth - barWidth) / 2
             let barHeight: CGFloat = 12
             let cornerRadius: CGFloat = barHeight / 2
-            
+
+            // Style toggles:
+            // - Set `useBlueProgressFill` to false to keep the bar neutral and make only the knob blue.
+            let useBlueProgressFill: Bool = false
+            // Darker blue than default `Color.blue` so it doesn't read as powder blue over the light bar.
+            let knobBlue = Color(red: 0.10, green: 0.35, blue: 0.85)
+
             // Knob sizing + travel mapping
-            let knobBaseDiameter: CGFloat = barHeight
+            // Resting knob is slightly larger than the bar; expand while touched/dragging to barHeight * 1.6.
+            let knobVisualDiameter: CGFloat = barHeight * 1.15
+            let knobExpandedScale: CGFloat = 1.6 / 1.15
             let knobTouchSize: CGFloat = 50
             let knobTouchHalf: CGFloat = knobTouchSize / 2
-            
+
             let maxProgress = (playbackManager.maxScrubbingDelay.seconds - playbackManager.minScrubbingDelay.seconds) / playbackManager.maxScrubbingDelay.seconds
-            
+
             let maxD = playbackManager.maxScrubbingDelay.seconds
             let minD = playbackManager.minScrubbingDelay.seconds
             let rightLimit = CGFloat((maxD - minD) / maxD) // progress cannot exceed this (i.e. cannot be < min delay)
-            
+
             // Clamped version to keep in [0,1]
             let clampedMarker = max(0, min(rightLimit, markerProgress))
 
@@ -1035,7 +1042,7 @@ struct ContentView: View {
 
             // Use smoothed progress for display when not scrubbing (reduces jitter); when scrubbing or in snap window use raw progress
             let displayProgress = isScrubbing ? progress : smoothedProgress
-            
+
             ZStack(alignment: .leading) {
                 WhiteCrosshatchBar()
                     .allowsHitTesting(false)
@@ -1050,10 +1057,21 @@ struct ContentView: View {
 //                    .offset(x: barWidth * available) // Move red bar to start at "available"
 
                 if BufferManager.shared.segmentIndex > 0 && !playbackManager.playerConstant.items().isEmpty {
+                    let playedWidth = barWidth * max(min(displayProgress, rightBound) - leftBound, 0)
+
                     Rectangle()
                         .fill(.gray)
-                        .frame(width: barWidth * max(min(displayProgress, rightBound) - leftBound, 0), height: barHeight)
+                        .frame(width: playedWidth, height: barHeight)
                         .offset(x: barWidth * leftBound)
+
+                    // Optional subtle blue tint for the played portion (keep low-opacity so it's not distracting).
+                    if useBlueProgressFill {
+                        Rectangle()
+                            .fill(knobBlue.opacity(0.22))
+                            .frame(width: playedWidth, height: barHeight)
+                            .offset(x: barWidth * leftBound)
+                    }
+
                     Rectangle()
                         .fill(.white)
                         .frame(width: barWidth * max(1 - displayProgress, 0), height: barHeight)
@@ -1099,14 +1117,14 @@ struct ContentView: View {
                 if playbackManager.playerConstant.currentItem != nil
                     && BufferManager.shared.segmentIndex > 0 {
                     Circle()
-                        .fill(.gray)
-                        .frame(width: knobBaseDiameter, height: knobBaseDiameter)
-                    /// Showing Drag Knob Only When Dragging
-                        .scaleEffect(showPlayerControls || isDragging ? 1.5 : 1.0, anchor: .center)
-                    /// For More Dragging Space
+                        .fill(knobBlue)
+                        .frame(width: knobVisualDiameter, height: knobVisualDiameter)
+                        .scaleEffect((isDragging || isScrubbing) ? knobExpandedScale : 1.0, anchor: .center)
+                        .shadow(radius: 2)
+                        /// For More Dragging Space
                         .frame(width: knobTouchSize, height: knobTouchSize)
                         .contentShape(Rectangle())
-                    /// Moving Along Side With Gesture Progress
+                        /// Moving Along Side With Gesture Progress
                         .offset(x: barWidth * displayProgress + margin - knobTouchHalf)
                         .gesture(
                             DragGesture(minimumDistance: 0)
@@ -1121,31 +1139,31 @@ struct ContentView: View {
                                         lastDraggedProgress = min(progress, rightBound)
                                         return
                                     }
-                                    
+
                                     // 1) drag → normalized progress
                                     let delta = (value.translation.width - dragStartTranslation) / barWidth
                                     let raw   = lastDraggedProgress + delta
                                     let clamped = max(leftBound, min(rightBound, raw))
                                     progress = clamped
-                                    
+
                                     // 2) UI while scrubbing
                                     isScrubbing = true
                                     let maxD = playbackManager.maxScrubbingDelay.seconds
                                     displayDelayTime = (1 - clamped) * maxD
                                     playbackManager.pausePlayerTemporarily()
-                                    
+
                                     // 3) convert to absolute target time (global timeline) and scrub (throttled)
                                     let targetDelay = (1 - clamped) * maxD
                                     let targetTime = canon600(playbackManager.currentTime)
                                     - CMTime(seconds: targetDelay, preferredTimescale: 600)
-                                    
+
                                     let nowTS = Date().timeIntervalSince1970
                                     if nowTS - lastUpdateTime >= 0.2 || true {   // throttle seeks while dragging (disabled)
                                         playbackManager.scrub(to: targetTime, allowSeekOnly: true)
                                         lastUpdateTime = nowTS
                                     }
                                 }
-                            
+
                                 .onEnded { _ in
                                     lastDraggedProgress = progress
                                     smoothedProgress = progress
@@ -1154,7 +1172,7 @@ struct ContentView: View {
                                     dragStartTranslation = 0
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                         isScrubbing = false
-                                        
+
                                         // Pin to “where we are now”
                                         let now  = canon600(playbackManager.currentTime)
                                         let play = canon600(playbackManager.getCurrentPlayingTime())
@@ -1162,7 +1180,7 @@ struct ContentView: View {
                                         measured = CMTimeMaximum(.zero,
                                                                  CMTimeMinimum(measured, playbackManager.maxScrubbingDelay))
                                         playbackManager.delayTime = roundCMTimeToNearestTenth(measured)
-                                        
+
                                         playbackManager.playPlayerIfWasPlaying()
                                     }
                                 }
@@ -1236,6 +1254,7 @@ struct ContentView: View {
             .overlay(alignment: .bottomLeading) {
                 // Seconds near knob: show when scrubbing, ±10, or bookmark; fade out after 3s (same as marker)
                 let showSecondsNearKnob = isDragging || isScrubbing || (lastScrubReleaseTimeForLabel != nil) || showMarker
+                let labelWidth: CGFloat = 150
                 Group {
                     if isScrubbing, let d = displayDelayTime {
                         let rounded = (d * 10).rounded() / 10
@@ -1258,8 +1277,9 @@ struct ContentView: View {
                     }
                 }
                 .font(.system(size: 20))
-                .frame(width: 150, height: 20)
-                .offset(x: barWidth * displayProgress, y: -10)
+                .frame(width: labelWidth, height: 20)
+                // Center over the knob (knob center = barWidth * progress + margin)
+                .offset(x: barWidth * displayProgress + margin - (labelWidth / 2), y: -26)
                 .opacity(showSecondsNearKnob ? 1 : 0)
                 .animation(
                     showSecondsNearKnob
