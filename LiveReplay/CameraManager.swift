@@ -10,6 +10,114 @@ import CoreMedia
 import Combine
 
 final class CameraManager: NSObject, ObservableObject {
+    // MARK: - Discovery helpers (single source of truth)
+
+    /// Preferred camera types for this app.
+    /// Keep the list small and predictable: front wide + back wide/ultrawide/tele.
+    static let preferredDeviceTypes: [AVCaptureDevice.DeviceType] = [
+        .builtInWideAngleCamera,
+        .builtInUltraWideCamera,
+        .builtInTelephotoCamera
+    ]
+
+    /// Discover devices without mutating CameraManager state.
+    /// - Parameters:
+    ///   - allTypes: when true, returns devices across all positions/types (for inspection).
+    ///   - location: used only when `allTypes == false`.
+    func discoverDevices(allTypes: Bool, location: CameraPosition) -> [AVCaptureDevice] {
+        let types: [AVCaptureDevice.DeviceType]
+        let position: AVCaptureDevice.Position
+
+        if allTypes {
+            types = Self.preferredDeviceTypes
+            position = .unspecified
+        } else {
+            switch location {
+            case .back:
+                types = [
+                    .builtInWideAngleCamera,
+                    .builtInTelephotoCamera,
+                    .builtInUltraWideCamera,
+                    .builtInDualCamera
+                ]
+            case .front:
+                types = [
+                    .builtInWideAngleCamera,
+                    .builtInTrueDepthCamera
+                ]
+            }
+            position = location.avPosition
+        }
+
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: types,
+            mediaType: .video,
+            position: position
+        )
+
+        return discovery.devices.sorted { a, b in
+            if a.position != b.position {
+                let rank: (AVCaptureDevice.Position) -> Int = { pos in
+                    switch pos {
+                    case .back: return 0
+                    case .front: return 1
+                    default: return 2
+                    }
+                }
+                return rank(a.position) < rank(b.position)
+            }
+            return a.localizedName < b.localizedName
+        }
+    }
+
+    /// Convenience: preferred devices across both front/back.
+    /// This is what SettingsView should present as "Camera" choices.
+    func discoverPreferredDevices() -> [AVCaptureDevice] {
+        discoverDevices(allTypes: true, location: cameraLocation)
+    }
+
+    /// Discover formats for a device without mutating CameraManager state.
+    /// - Parameters:
+    ///   - allFormats: when true, returns all formats.
+    func discoverFormats(allFormats: Bool, device: AVCaptureDevice) -> [AVCaptureDevice.Format] {
+        var formats: [AVCaptureDevice.Format]
+
+        if allFormats {
+            formats = device.formats
+        } else {
+            let videoRangeType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange   // "420v"
+            let wantedResolutions: [(Int32, Int32)] = [
+                (1280, 720),
+                (1920, 1080),
+                (3840, 2160)
+            ]
+
+            formats = device.formats.filter { fmt in
+                let desc = fmt.formatDescription
+                let dims = CMVideoFormatDescriptionGetDimensions(desc)
+                let mediaSub = CMFormatDescriptionGetMediaSubType(desc)
+                return mediaSub == videoRangeType
+                    && wantedResolutions.contains { $0.0 == dims.width && $0.1 == dims.height }
+            }
+        }
+
+        // Stable ordering: larger resolution first, then higher max FPS.
+        formats.sort {
+            let aDesc = $0.formatDescription
+            let bDesc = $1.formatDescription
+            let aDims = CMVideoFormatDescriptionGetDimensions(aDesc)
+            let bDims = CMVideoFormatDescriptionGetDimensions(bDesc)
+
+            if aDims.width != bDims.width { return aDims.width > bDims.width }
+            if aDims.height != bDims.height { return aDims.height > bDims.height }
+
+            let aFPS = $0.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+            let bFPS = $1.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+            return aFPS > bFPS
+        }
+
+        return formats
+    }
     
     static let shared = CameraManager()
 
@@ -82,6 +190,66 @@ final class CameraManager: NSObject, ObservableObject {
             }
         }
     }
+
+    // MARK: - Best-effort camera switching helpers (size/fps buckets + format preference)
+
+    enum VideoSizeBucket {
+        case k4, p1080, p720
+    }
+
+    enum FPSBucket: Int, CaseIterable {
+        case fps30 = 30
+        case fps60 = 60
+        case fps120 = 120
+        case fps240 = 240
+
+        /// Descending order (highest first)
+        static var descending: [FPSBucket] { [.fps240, .fps120, .fps60, .fps30] }
+    }
+
+    private func sizeBucket(for format: AVCaptureDevice.Format) -> VideoSizeBucket? {
+        let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        switch (dims.width, dims.height) {
+        case (3840, 2160): return .k4
+        case (_, 1080):    return .p1080
+        case (_, 720):     return .p720
+        default:           return nil
+        }
+    }
+
+    private func fpsBucket(for format: AVCaptureDevice.Format) -> FPSBucket {
+        let fpsMax = format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+        if fpsMax >= 240 { return .fps240 }
+        if fpsMax >= 120 { return .fps120 }
+        if fpsMax >= 60  { return .fps60 }
+        return .fps30
+    }
+
+    private func formatPreferenceKey(_ format: AVCaptureDevice.Format) -> (Int, Int) {
+        // Lower is better: prefer non-HDR (0) over HDR (1), and prefer binned (0) over not binned (1).
+        let hdrKey = format.isVideoHDRSupported ? 1 : 0
+        let binnedKey = format.isVideoBinned ? 0 : 1
+        return (hdrKey, binnedKey)
+    }
+
+    private func pickPreferredIndex(_ indices: [Int], in formats: [AVCaptureDevice.Format]) -> Int? {
+        guard !indices.isEmpty else { return nil }
+        return indices.min { a, b in
+            let ka = formatPreferenceKey(formats[a])
+            let kb = formatPreferenceKey(formats[b])
+            if ka.0 != kb.0 { return ka.0 < kb.0 }
+            if ka.1 != kb.1 { return ka.1 < kb.1 }
+            return a < b
+        }
+    }
+
+    private func oppositePosition(for position: AVCaptureDevice.Position) -> AVCaptureDevice.Position {
+        switch position {
+        case .back:  return .front
+        case .front: return .back
+        default:     return .unspecified
+        }
+    }
     @Published var cameraLocation: CameraPosition = .back {
         willSet {
             isCameraSwitchInProgress = true
@@ -121,6 +289,7 @@ final class CameraManager: NSObject, ObservableObject {
             cancelAssetWriter()
         }
         didSet {
+            guard availableFormats.indices.contains(selectedFormatIndex) else { return }
             // 1) recompute fps for the new format, but only 30/60/120/240 if supported
             let ranges = availableFormats[selectedFormatIndex].videoSupportedFrameRateRanges
             let standardRates: [Double] = [30, 60, 120, 240]
@@ -149,33 +318,13 @@ final class CameraManager: NSObject, ObservableObject {
     
 
     private func updateAvailableDevices() {
-        // choose which device‐types you want users to see
-        let types: [AVCaptureDevice.DeviceType]
-        switch cameraLocation {
-        case .back:
-            types = [
-              .builtInWideAngleCamera,
-              .builtInTelephotoCamera,
-              .builtInUltraWideCamera,
-              .builtInDualCamera
-            ]
-        case .front:
-            types = [
-              .builtInWideAngleCamera,
-              .builtInTrueDepthCamera
-            ]
-        }
+        // Show only the preferred cameras for this app.
+        let devices = discoverPreferredDevices()
 
-        let discovery = AVCaptureDevice.DiscoverySession(
-            deviceTypes: types,
-            mediaType: .video,
-            position: cameraLocation.avPosition
-        )
-        let devices = discovery.devices
         DispatchQueue.main.async {
             self.availableDevices = devices
             // make sure selectedDeviceUniqueID is valid
-            if !devices.map(\.uniqueID).contains(self.selectedDeviceUniqueID) {
+            if self.selectedDeviceUniqueID.isEmpty || !devices.map(\.uniqueID).contains(self.selectedDeviceUniqueID) {
                 self.selectedDeviceUniqueID = devices.first?.uniqueID ?? ""
             }
             self.updateAvailableFormats()
@@ -190,50 +339,24 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        let videoRangeType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-            let wantedResolutions: [(Int32, Int32)] = [
-                (1280, 720),
-                (1920, 1080),
-                (3840, 2160)
-            ]
-
-        availableFormats = device.formats.filter { fmt in
-            let desc = fmt.formatDescription
-            let dims = CMVideoFormatDescriptionGetDimensions(desc)
-            let mediaSub = CMFormatDescriptionGetMediaSubType(desc)
-            // only 420v & one of our wanted sizes
-            return mediaSub == videoRangeType
-                && wantedResolutions.contains { $0.0 == dims.width && $0.1 == dims.height }
-        }
+        // Back to filtered list: 420v/420f at 720p/1080p/4K.
+        availableFormats = discoverFormats(allFormats: false, device: device)
 
         guard !availableFormats.isEmpty else {
             selectedFormatIndex = 0
             return
         }
-        
-        // recompute FPS choices for the newly-selected format
-        if availableFormats.indices.contains(selectedFormatIndex) {
-            let ranges = availableFormats[selectedFormatIndex].videoSupportedFrameRateRanges
-            // we’ll just list each range’s maxFrameRate
-            availableFrameRates = ranges.map { $0.maxFrameRate }.sorted()
-            // clamp the selectedFrameRate
-            if !availableFrameRates.contains(selectedFrameRate) {
-                selectedFrameRate = availableFrameRates.first ?? availableFrameRates.first ?? 30
-            }
-        } else {
-            availableFrameRates = []
-            selectedFrameRate = 0
+
+        // Clamp the selected index safely.
+        if !availableFormats.indices.contains(selectedFormatIndex) {
+            selectedFormatIndex = 0
         }
-        
-        // clamp the selected index
-        // clamp, *then* restart
-        let safeIndex = min(selectedFormatIndex, availableFormats.count-1)
-        if safeIndex != selectedFormatIndex {
-            selectedFormatIndex = safeIndex   // this will call restartSession()
-        }
-        
-        if selectedFormatIndex >= availableFormats.count {
-            selectedFormatIndex = 0       // this will trigger restartSession() once
+
+        // Recompute FPS choices for the selected format.
+        let ranges = availableFormats[selectedFormatIndex].videoSupportedFrameRateRanges
+        availableFrameRates = ranges.map { $0.maxFrameRate }.sorted()
+        if !availableFrameRates.contains(selectedFrameRate) {
+            selectedFrameRate = availableFrameRates.first ?? 30
         }
     }
 
@@ -350,6 +473,136 @@ final class CameraManager: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 self?.isCameraSwitchInProgress = false
             }
+        }
+    }
+
+    // MARK: - Best-effort flip (preserve intent, downgrade if needed)
+
+    /// Flip front/back while preserving the user’s intent (size bucket + fps bucket).
+    /// If the target camera cannot satisfy the intent, downgrade to the closest valid combination,
+    /// then choose the preferred format (non-HDR, then binned).
+    func flipCameraBestEffort() {
+        // Capture intent from currently selected format.
+        var desiredSize: VideoSizeBucket? = nil
+        var desiredFPS: FPSBucket = .fps30
+
+        if availableFormats.indices.contains(selectedFormatIndex) {
+            let fmt = availableFormats[selectedFormatIndex]
+            desiredSize = sizeBucket(for: fmt)
+            desiredFPS = fpsBucket(for: fmt)
+        }
+
+        // Determine current physical position and target physical position.
+        let currentPhysicalPosition: AVCaptureDevice.Position = selectedDevice?.position ?? cameraLocation.avPosition
+        let targetPhysicalPosition: AVCaptureDevice.Position = oppositePosition(for: currentPhysicalPosition)
+
+        // Toggle cameraLocation (keeps the app’s existing semantics for mirroring/connection behavior).
+        cameraLocation = (cameraLocation == .back) ? .front : .back
+
+        // Select a device on the target side (if available). This triggers format/session rebuild via didSet.
+        if let targetDevice = availableDevices.first(where: { $0.position == targetPhysicalPosition }) {
+            selectedDeviceUniqueID = targetDevice.uniqueID
+        }
+
+        // Apply best-effort format selection after formats are ready.
+        applyBestEffortSelectionWhenReady(
+            desiredSize: desiredSize,
+            desiredFPS: desiredFPS,
+            targetPhysicalPosition: targetPhysicalPosition
+        )
+    }
+
+    private func applyBestEffortSelectionWhenReady(
+        desiredSize: VideoSizeBucket?,
+        desiredFPS: FPSBucket,
+        targetPhysicalPosition: AVCaptureDevice.Position,
+        attemptsRemaining: Int = 12
+    ) {
+        // Wait for device + formats to populate.
+        guard attemptsRemaining > 0 else { return }
+
+        // If we still don’t have a target-side device selected, try to pick one.
+        if selectedDevice?.position != targetPhysicalPosition {
+            if let targetDevice = availableDevices.first(where: { $0.position == targetPhysicalPosition }) {
+                if selectedDeviceUniqueID != targetDevice.uniqueID {
+                    selectedDeviceUniqueID = targetDevice.uniqueID
+                }
+            }
+        }
+
+        // If formats aren’t ready yet, retry shortly.
+        if availableFormats.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+                self?.applyBestEffortSelectionWhenReady(
+                    desiredSize: desiredSize,
+                    desiredFPS: desiredFPS,
+                    targetPhysicalPosition: targetPhysicalPosition,
+                    attemptsRemaining: attemptsRemaining - 1
+                )
+            }
+            return
+        }
+
+        applyBestEffortFormatSelection(desiredSize: desiredSize, desiredFPS: desiredFPS)
+    }
+
+    private func applyBestEffortFormatSelection(desiredSize: VideoSizeBucket?, desiredFPS: FPSBucket) {
+        let formats = availableFormats
+        guard !formats.isEmpty else { return }
+
+        func matches(_ idx: Int, size: VideoSizeBucket?, fps: FPSBucket) -> Bool {
+            if let size = size {
+                guard sizeBucket(for: formats[idx]) == size else { return false }
+            }
+            return fpsBucket(for: formats[idx]) == fps
+        }
+
+        let allIdx = Array(formats.indices)
+
+        // 1) Strict match: desired size + desired fps
+        if let size = desiredSize {
+            let strict = allIdx.filter { matches($0, size: size, fps: desiredFPS) }
+            if let pick = pickPreferredIndex(strict, in: formats) {
+                selectedFormatIndex = pick
+                return
+            }
+        }
+
+        // 2) Keep size, downgrade FPS (starting from desiredFPS and walking down)
+        if let size = desiredSize, let start = FPSBucket.descending.firstIndex(of: desiredFPS) {
+            for fps in FPSBucket.descending[start...] {
+                let candidates = allIdx.filter { matches($0, size: size, fps: fps) }
+                if let pick = pickPreferredIndex(candidates, in: formats) {
+                    selectedFormatIndex = pick
+                    return
+                }
+            }
+        }
+
+        // 3) Keep FPS, downgrade size (starting from desiredSize and walking down)
+        let sizeOrder: [VideoSizeBucket] = [.k4, .p1080, .p720]
+        if let desiredSize = desiredSize, let start = sizeOrder.firstIndex(of: desiredSize) {
+            for size in sizeOrder[start...] {
+                let candidates = allIdx.filter { matches($0, size: size, fps: desiredFPS) }
+                if let pick = pickPreferredIndex(candidates, in: formats) {
+                    selectedFormatIndex = pick
+                    return
+                }
+            }
+        } else {
+            // If size unknown, try desired FPS across any size.
+            let candidates = allIdx.filter { fpsBucket(for: formats[$0]) == desiredFPS }
+            if let pick = pickPreferredIndex(candidates, in: formats) {
+                selectedFormatIndex = pick
+                return
+            }
+        }
+
+        // 4) Last resort: pick any format by preference
+        if let pick = pickPreferredIndex(allIdx, in: formats) {
+            selectedFormatIndex = pick
+        } else {
+            selectedFormatIndex = 0
         }
     }
     
@@ -603,6 +856,12 @@ extension CameraManager {
         device.activeFormat                = format
         device.activeVideoMinFrameDuration = oneFrame
         device.activeVideoMaxFrameDuration = oneFrame
+
+        // Debug: confirm what actually got applied.
+        let activeDims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+        let activeFPS = 1.0 / max(0.000001, CMTimeGetSeconds(device.activeVideoMinFrameDuration))
+        print("✅ ACTIVE format \(activeDims.width)x\(activeDims.height) @ \(String(format: "%.1f", activeFPS))fps, HDR=\(device.activeFormat.isVideoHDRSupported), binned=\(device.activeFormat.isVideoBinned)")
+
         device.unlockForConfiguration()
         
         // 5️⃣ publish & start running

@@ -143,10 +143,6 @@ struct ContentView: View {
             }
             
 
-            if showSettings {
-                SettingsView(showSettings: $showSettings)
-                    .statusBarHidden()
-            }
             GeometryReader { geo in
             //                if geo.size.height > geo.size.width {
             //                    let previewScale = geo.size.height * 0.25
@@ -263,6 +259,38 @@ struct ContentView: View {
         .overlay(OnScreenLogOverlayView())
         .safeAreaInset(edge: .bottom) {
             bottomControlsInset()
+        }
+        .overlay {
+            // Settings modal overlay (centered) + dim background
+            if showSettings {
+                ZStack {
+                    // Dimmed backdrop
+                    Color.black.opacity(0.55)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                showSettings = false
+                            }
+                        }
+
+                    // Modal card
+                    SettingsView(showSettings: $showSettings)
+                        .frame(maxWidth: 520)
+                        .padding(16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(Color(UIColor.systemBackground))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                        .shadow(radius: 24)
+                        // Prevent taps inside the modal from dismissing it
+                        .onTapGesture { }
+                }
+                .transition(.opacity)
+            }
         }
         .onChange(of: scenePhase) { newPhase in
             switch newPhase {
@@ -781,7 +809,7 @@ struct ContentView: View {
                 HStack(spacing: 20) {
                     Spacer(minLength: 0)
 
-                    Button { showSettings = true } label: {
+                    Button { withAnimation(.easeOut(duration: 0.15)) { showSettings.toggle() } } label: {
                         ZStack {
                             Circle()
                                 .fill(Color.black.opacity(0.45))
@@ -833,7 +861,7 @@ struct ContentView: View {
                     .buttonStyle(NoTapAnimationStyle())
 
                     Button {
-                        cameraManager.cameraLocation = (cameraManager.cameraLocation == .back) ? .front : .back
+                        cameraManager.flipCameraBestEffort()
                     } label: {
                         ZStack {
                             Circle()
