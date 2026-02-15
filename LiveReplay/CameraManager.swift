@@ -961,23 +961,11 @@ extension CameraManager {
         let width  = isPortrait ? dims.height : dims.width
         let height = isPortrait ? dims.width  : dims.height
 
-        // --- NEW: GOP/keyframe + no B-frame hints ---
-        let fps        = max(1, Int(round(selectedFrameRate)))          // expected fps
-        let gopSeconds = min(assetWriterInterval, 1.0)                  // GOP to match segment length
-        let gopFrames  = max(1, fps * Int(assetWriterInterval))         // keyframe interval in frames
-        let compression: [String: Any] = [
-            AVVideoExpectedSourceFrameRateKey: fps,                     // pacing hint
-            AVVideoMaxKeyFrameIntervalKey: gopFrames,                   // match segment length in frames
-            AVVideoMaxKeyFrameIntervalDurationKey: gopSeconds,          // match segment length in seconds
-            AVVideoAllowFrameReorderingKey: false,                      // avoid B-frame reorder at joins
-            AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
-        ]
-        
+        /// Simple encoder settings (no compression hints) — lower CPU
         let settings: [String: Any] = [
             AVVideoCodecKey:  AVVideoCodecType.h264,
             AVVideoWidthKey:  Int(width),
-            AVVideoHeightKey: Int(height),
-            AVVideoCompressionPropertiesKey: compression
+            AVVideoHeightKey: Int(height)
         ]
 
         // build the writer
@@ -989,7 +977,6 @@ extension CameraManager {
 
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         videoInput.expectsMediaDataInRealTime = true
-        videoInput.performsMultiPassEncodingIfSupported = false
 
         if let w = assetWriter, w.canAdd(videoInput) {
             w.add(videoInput)
