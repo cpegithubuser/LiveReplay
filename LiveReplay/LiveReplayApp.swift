@@ -12,9 +12,6 @@ import AVFoundation
 struct LiveReplayApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
-    // Remember whether we should resume playback after returning active
-    @State private var wasPlaying: Bool = false
-
     // Avoid double-teardown when iOS delivers multiple background transitions
     @State private var didTeardownForBackground: Bool = false
 
@@ -32,24 +29,16 @@ struct LiveReplayApp: App {
                 guard !didTeardownForBackground else { return }
                 didTeardownForBackground = true
 
-                wasPlaying = PlaybackManager.shared.playerConstant.rate > 0
-
                 PlaybackManager.shared.stopAndClearQueue()
                 BufferManager.shared.resetBuffer()
                 CameraManager.shared.stopForBackground()
 
             case .active:
-                // Minimal resume:
-                // - restart capture + writer
-                // - resume playback only if it was playing
+                // Behave as if starting up: restart capture + writer only; do not auto-resume playback.
+                // Same play logic as cold start (user taps play, or autoStartPlaybackIfNeeded with same guards).
                 didTeardownForBackground = false
 
                 CameraManager.shared.startAfterForeground()
-
-                if wasPlaying {
-                    PlaybackManager.shared.playerConstant.play()
-                    PlaybackManager.shared.playbackState = .playing
-                }
 
             default:
                 break
