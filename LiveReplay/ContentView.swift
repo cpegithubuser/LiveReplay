@@ -463,14 +463,14 @@ struct ContentView: View {
         // avoid stacking multiple timers
         playbackUpdateTimer?.invalidate()
         playbackUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
-            // Skip scrubber updates when playing with full buffer and user not touching the bar (keeps CPU low)
+            // Skip scrubber updates only when buffer is fully past the end of the bar (keeps CPU low, gray bar can reach the left)
             if playbackManager.playerConstant.rate > 0 && !isScrubbing && !isDragging {
                 let maxD = playbackManager.maxScrubbingDelay.seconds
                 if maxD > 0 {
                     let now = canon600(playbackManager.currentTime)
                     let earliest = canon600(BufferManager.shared.earliestPlaybackBufferTime)
                     let bufferedSpan = max(0, (now - earliest).seconds)
-                    if bufferedSpan >= maxD - 0.02 { return }
+                    if bufferedSpan >= maxD { return }
                 }
             }
             updatePlaybackProgressTick()
