@@ -1116,34 +1116,14 @@ struct ContentView: View {
                         .offset(x: barWidth * displayProgress)
                 }
 
-                // Flowing dots: full bar, right-to-left at real-time rate. No dots in left no-buffer zone.
-                let periodSec = max(0.001, maxD)
-                let dotSize: CGFloat = 3
-                TimelineView(.animation(minimumInterval: 0.03)) { timeline in
-                    let time = timeline.date.timeIntervalSinceReferenceDate
-                    let dotCount = 12
-                    ZStack(alignment: .leading) {
-                        Color.clear
-                            .frame(width: barWidth, height: barHeight)
-                        ForEach(0..<dotCount, id: \.self) { i in
-                            let phase = Double(i) / Double(dotCount)
-                            let position = (time / periodSec + phase).truncatingRemainder(dividingBy: 1)
-                            let x = (1 - CGFloat(position)) * barWidth - dotSize / 2
-                            Circle()
-                                .fill(Color.black.opacity(0.35))
-                                .frame(width: dotSize, height: dotSize)
-                                .offset(x: x)
-                        }
-                    }
-                    .frame(width: barWidth, height: barHeight)
-                }
-                .frame(width: barWidth, height: barHeight)
-                .mask(
-                    HStack(spacing: 0) {
-                        Color.clear.frame(width: barWidth * leftBound)
-                        Rectangle().fill(Color.black).frame(width: barWidth * max(1 - leftBound, 0), height: barHeight)
-                    }
+                // Flowing dots: CALayers + CAAnimation (no SwiftUI redraws)
+                ScrubberDotsLayerView(
+                    barWidth: barWidth,
+                    barHeight: barHeight,
+                    leftBound: leftBound,
+                    periodSec: max(0.001, maxD)
                 )
+                .allowsHitTesting(false)
 
             }
             .allowsHitTesting(isScrubbableReady)
