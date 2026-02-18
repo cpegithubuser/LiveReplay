@@ -13,7 +13,7 @@ final class CrosshatchHostView: UIView {
     var lineLayers: [CALayer] = []
     var expectedWidth: CGFloat = 0
     var expectedHeight: CGFloat = 0
-    private let hatchColor = UIColor(white: 0.35, alpha: 1).cgColor
+    private let hatchColor = UIColor(white: 0.48, alpha: 1).cgColor
 
     override init(frame: CGRect) {
         super.init(frame: frame)
