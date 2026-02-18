@@ -27,6 +27,7 @@
         var delayTime: CMTime = .zero
         
         var maxScrubbingDelay = CMTimeMake(value: 30, timescale: 1)
+        /// Single setting: minimum delay (seconds from live). Used for scrub right limit, play guard, bookmark floor, etc. Change this to adjust the "earliest allowed" limit (e.g. 2 sec).
         var minScrubbingDelay = CMTimeMake(value: 20, timescale: 10)
         
         // This closure will be provided by the UI (ContentView)

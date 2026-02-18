@@ -515,8 +515,9 @@ struct ContentView: View {
         // Live measurements (seconds)
         let bufferedSpan = max(0, (now - earliest).seconds)
 
-        // Desired startup delay from the bookmark marker
-        let desiredFromMarker = min(maxD, max(0, bookmarkedDelay.seconds))
+        // Desired startup delay from the bookmark marker (clamp to [minD, maxD])
+        let minD = playbackManager.minScrubbingDelay.seconds
+        let desiredFromMarker = max(minD, min(maxD, bookmarkedDelay.seconds))
 
         switch playbackManager.playbackState {
         case .playing:
@@ -911,7 +912,17 @@ struct ContentView: View {
                     }
                     Button(action: {
                         showSecondsLabelAndScheduleHide()
-                        playbackManager.togglePlayPause()
+                        if playbackManager.playerConstant.rate > 0 {
+                            playbackManager.togglePlayPause()
+                        } else {
+                            let minD = playbackManager.minScrubbingDelay.seconds
+                            let now = canon600(playbackManager.currentTime)
+                            let play = canon600(playbackManager.getCurrentPlayingTime())
+                            let actualDelay = max(0, (now - play).seconds)
+                            if actualDelay >= minD {
+                                playbackManager.togglePlayPause()
+                            }
+                        }
                     }) {
                         ZStack {
                             Circle()
@@ -982,11 +993,12 @@ struct ContentView: View {
         playbackManager.isPlayingPingPong = false
         playbackManager.isPlayingLoop = false
 
-        // clamp to the enforceable window for the actual seek
-        let targetDelaySec = min(
+        // clamp to the enforceable window [minDelay, maxDelay] (bookmark can never go earlier than min)
+        let minD = playbackManager.minScrubbingDelay.seconds
+        let targetDelaySec = max(minD, min(
             playbackManager.maxScrubbingDelay.seconds,
-            max(0, bookmarkedDelay.seconds)
-        )
+            bookmarkedDelay.seconds
+        ))
         let delay = CMTime(seconds: targetDelaySec, preferredTimescale: 600)
 
         showAndScheduleHide()
@@ -1200,7 +1212,10 @@ struct ContentView: View {
                                                                  CMTimeMinimum(measured, playbackManager.maxScrubbingDelay))
                                         playbackManager.delayTime = roundCMTimeToNearestTenth(measured)
 
-                                        playbackManager.playPlayerIfWasPlaying()
+                                        let minD = playbackManager.minScrubbingDelay.seconds
+                                        if measured.seconds >= minD {
+                                            playbackManager.playPlayerIfWasPlaying()
+                                        }
                                     }
                                 }
                         )
@@ -1258,8 +1273,9 @@ struct ContentView: View {
                         let newProg = lastMarkerProgress + (deltaX / barWidth)
                         // clamp to [0,1] for geometry
                         markerProgress = min(max(newProg, 0), rightLimit)
-                        // update the absolute bookmark to match the new position
-                        bookmarkedDelay = delay(for: markerProgress)
+                        // update the absolute bookmark to match the new position (never earlier than min delay)
+                        let d = delay(for: markerProgress)
+                        bookmarkedDelay = CMTimeMaximum(playbackManager.minScrubbingDelay, d)
                     }
                     .onEnded { _ in
                         lastMarkerProgress = markerProgress
