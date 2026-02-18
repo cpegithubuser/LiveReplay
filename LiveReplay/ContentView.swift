@@ -1082,7 +1082,8 @@ struct ContentView: View {
             let displayProgress = isScrubbing ? progress : smoothedProgress
 
             ZStack(alignment: .leading) {
-                WhiteCrosshatchBar()
+                ScrubberCrosshatchView(width: barWidth, height: barHeight)
+                    .frame(width: barWidth, height: barHeight)
                     .allowsHitTesting(false)
                 // Right-side no-buffer zone: cover crosshatch so it doesn’t show there
 //                Rectangle()
@@ -1349,33 +1350,6 @@ func roundCMTimeToNearestTenth(_ time: CMTime) -> CMTime {
     let seconds = CMTimeGetSeconds(time)
     let roundedSeconds = (seconds * 10).rounded() / 10
     return CMTimeMakeWithSeconds(roundedSeconds, preferredTimescale: time.timescale)
-}
-
-/// Light gray background with dark gray diagonal lines (top-right to bottom-left). For scrub bar background only.
-private struct WhiteCrosshatchBar: View {
-    private let spacing: CGFloat = 8
-    private let backgroundColor = Color(white: 0.85)
-    private let hatchColor = Color(white: 0.35)
-    var body: some View {
-        GeometryReader { g in
-            let w = g.size.width
-            let h = g.size.height
-            let diag = sqrt(w * w + h * h)
-            let n = Int(diag / spacing) + 2
-            ZStack {
-                Rectangle().fill(backgroundColor)
-                ForEach(0..<n, id: \.self) { i in
-                    Rectangle()
-                        .fill(hatchColor)
-                        .frame(width: 1, height: diag * 2)
-                        .rotationEffect(.degrees(45))
-                        .offset(x: CGFloat(i) * spacing - diag / 2, y: 0)
-                }
-            }
-            .frame(width: w, height: h)
-            .clipped()
-        }
-    }
 }
 
 
