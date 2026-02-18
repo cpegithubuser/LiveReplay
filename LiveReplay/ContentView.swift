@@ -1096,7 +1096,7 @@ struct ContentView: View {
 //                    .offset(x: barWidth * available) // Move red bar to start at "available"
 
                 if BufferManager.shared.segmentIndex > 0 && !playbackManager.playerConstant.items().isEmpty {
-                    let playedWidth = barWidth * max(min(displayProgress, rightBound) - leftBound, 0)
+                    let playedWidth = barWidth * max(min(displayProgress, 1) - leftBound, 0)
 
                     Rectangle()
                         .fill(.gray)
