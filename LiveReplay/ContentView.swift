@@ -463,14 +463,14 @@ struct ContentView: View {
         // avoid stacking multiple timers
         playbackUpdateTimer?.invalidate()
         playbackUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
-            // Skip scrubber updates only when buffer is fully past the end of the bar (keeps CPU low, gray bar can reach the left)
+            // Skip scrubber updates only when buffer is past the left end by at least 0.5 sec (gray bar has long since reached the left)
             if playbackManager.playerConstant.rate > 0 && !isScrubbing && !isDragging {
                 let maxD = playbackManager.maxScrubbingDelay.seconds
                 if maxD > 0 {
                     let now = canon600(playbackManager.currentTime)
                     let earliest = canon600(BufferManager.shared.earliestPlaybackBufferTime)
                     let bufferedSpan = max(0, (now - earliest).seconds)
-                    if bufferedSpan >= maxD { return }
+                    if bufferedSpan >= maxD + 0.5 { return }
                 }
             }
             updatePlaybackProgressTick()
@@ -1109,18 +1109,20 @@ struct ContentView: View {
 
                 if BufferManager.shared.segmentIndex > 0 && !playbackManager.playerConstant.items().isEmpty {
                     let playedWidth = barWidth * max(min(displayProgress, 1) - leftBound, 0)
+                    let grayX = max(0, barWidth * leftBound - 0.5)
+                    let widthNudge = (barWidth * leftBound) - grayX
 
                     Rectangle()
                         .fill(.gray)
-                        .frame(width: playedWidth, height: barHeight)
-                        .offset(x: barWidth * leftBound)
+                        .frame(width: playedWidth + widthNudge, height: barHeight)
+                        .offset(x: grayX)
 
                     // Optional subtle blue tint for the played portion (keep low-opacity so it's not distracting).
                     if useBlueProgressFill {
                         Rectangle()
                             .fill(knobBlue.opacity(0.22))
-                            .frame(width: playedWidth, height: barHeight)
-                            .offset(x: barWidth * leftBound)
+                            .frame(width: playedWidth + widthNudge, height: barHeight)
+                            .offset(x: grayX)
                     }
 
                     Rectangle()
