@@ -250,10 +250,7 @@
             printBug(.bugForwardRewind, "rewind to delay:", clampedSec, "available:", availableSec)
 
             DispatchQueue.main.async {
-                self.pausePlayerTemporarily()
-                self.scrub(to: targetAbs, allowSeekOnly: true) {
-                    self.playPlayerIfWasPlaying()
-                }
+                self.scrub(to: targetAbs, allowSeekOnly: true)
             }
         }
         
@@ -283,10 +280,7 @@
             printBug(.bugForwardRewind, "forward to delay:", clampedSec, "available:", availableSec)
 
             DispatchQueue.main.async {
-                self.pausePlayerTemporarily()
-                self.scrub(to: targetAbs, allowSeekOnly: true) {
-                    self.playPlayerIfWasPlaying()
-                }
+                self.scrub(to: targetAbs, allowSeekOnly: true)
             }
         }
         
