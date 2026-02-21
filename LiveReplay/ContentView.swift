@@ -76,6 +76,8 @@ struct ContentView: View {
     /// Scrub fractions
     @State private var leftBound:  CGFloat = 1   // L
     @State private var rightBound: CGFloat = 1   // R
+    /// After ±10, don't skip timer for this long so scrub bar and text can catch up.
+    @State private var lastPlusMinus10Time: Date?
 
     @inline(__always)
     private func canon600(_ t: CMTime) -> CMTime {
@@ -235,6 +237,17 @@ struct ContentView: View {
             liveReplayHudPill()
                 .padding(10)
                 .offset(hudOffset)
+                .onTapGesture {
+                    // Debug: one manual update of scrubber and text box
+                    updatePlaybackProgressTick()
+                    if playbackManager.playerConstant.rate > 0 {
+                        let now = canon600(playbackManager.currentTime)
+                        let play = canon600(playbackManager.getCurrentPlayingTime())
+                        var measured = now - play
+                        measured = CMTimeMaximum(.zero, CMTimeMinimum(measured, playbackManager.maxScrubbingDelay))
+                        playbackManager.delayTime = roundCMTimeToNearestTenth(measured)
+                    }
+                }
                 .onTapGesture(count: 2) {
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                         hudOffset = .zero
@@ -463,14 +476,18 @@ struct ContentView: View {
         // avoid stacking multiple timers
         playbackUpdateTimer?.invalidate()
         playbackUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
-            // Skip scrubber updates only when buffer is past the left end by at least 0.5 sec (gray bar has long since reached the left)
+            // Skip scrubber updates only when buffer is past the left end by at least 0.5 sec (gray bar has long since reached the left).
+            // After ±10 we don't skip for 0.2s so scrub bar and text can catch up.
             if playbackManager.playerConstant.rate > 0 && !isScrubbing && !isDragging {
-                let maxD = playbackManager.maxScrubbingDelay.seconds
-                if maxD > 0 {
-                    let now = canon600(playbackManager.currentTime)
-                    let earliest = canon600(BufferManager.shared.earliestPlaybackBufferTime)
-                    let bufferedSpan = max(0, (now - earliest).seconds)
-                    if bufferedSpan >= maxD + 0.5 { return }
+                let recentPlusMinus10 = lastPlusMinus10Time.map { Date().timeIntervalSince($0) < 0.2 } ?? false
+                if !recentPlusMinus10 {
+                    let maxD = playbackManager.maxScrubbingDelay.seconds
+                    if maxD > 0 {
+                        let now = canon600(playbackManager.currentTime)
+                        let earliest = canon600(BufferManager.shared.earliestPlaybackBufferTime)
+                        let bufferedSpan = max(0, (now - earliest).seconds)
+                        if bufferedSpan >= maxD + 0.5 { return }
+                    }
                 }
             }
             updatePlaybackProgressTick()
@@ -896,6 +913,7 @@ struct ContentView: View {
                 HStack(spacing: 20) {
                     Button(action: {
                         lastScrubEndTime = Date()
+                        lastPlusMinus10Time = Date()
                         showSecondsLabelAndScheduleHide()
                         playbackManager.rewind10Seconds()
                     }) {
@@ -937,6 +955,7 @@ struct ContentView: View {
                     }
                     Button(action: {
                         lastScrubEndTime = Date()
+                        lastPlusMinus10Time = Date()
                         showSecondsLabelAndScheduleHide()
                         playbackManager.forward10Seconds()
                     }) {
@@ -1090,8 +1109,8 @@ struct ContentView: View {
             // Convert to a time delay (seconds)
             let markerDelay = (1 - clampedMarker) * playbackManager.maxScrubbingDelay.seconds
 
-            // Use smoothed progress for display when not scrubbing (reduces jitter); when scrubbing or in snap window use raw progress
-            let displayProgress = isScrubbing ? progress : smoothedProgress
+            // No smoothing: use raw progress for knob/bar (set to smoothedProgress for EMA-smoothed motion)
+            let displayProgress = progress
 
             ZStack(alignment: .leading) {
                 ScrubberCrosshatchView(width: barWidth, height: barHeight)
