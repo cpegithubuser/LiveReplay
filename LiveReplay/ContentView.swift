@@ -627,15 +627,20 @@ struct ContentView: View {
         // Raw, *unclamped* actual delay for display/diagnostics
         let actualDelayRaw = max(0, (now - absPlay).seconds)
 
-        // For progress knob: reflect actual delay up to the buffered span
+        // For progress knob: when playing use target delay; when paused use actual
         let windowSpan = min(maxD, bufferedSpan)
-        let delayForProgress = min(actualDelayRaw, windowSpan)
+        let delayForKnob: Double
+        if playbackManager.playerConstant.rate != 0, playbackManager.delayTime != .zero {
+            delayForKnob = min(playbackManager.delayTime.seconds, windowSpan)
+        } else {
+            delayForKnob = min(actualDelayRaw, windowSpan)
+        }
         
         // Treat “near live” as undefined (or show LIVE) only for the unpinned display
         let liveEPS = 0.05
         if !isScrubbing {
             displayDelayTime = (actualDelayRaw <= liveEPS) ? nil : actualDelayRaw
-            let visual = max(1 - (actualDelayRaw / maxD), leftBound)
+            let visual = max(1 - (delayForKnob / maxD), leftBound)
             progress = min(visual, 1)   // can be > rightBound, but never > 1
             // EMA smooth knob to reduce jitter; after scrub release use raw progress for a short window so knob snaps
             if let t = lastScrubEndTime, Date().timeIntervalSince(t) < scrubSnapWindowSeconds {
