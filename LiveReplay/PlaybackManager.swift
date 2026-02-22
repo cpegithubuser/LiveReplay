@@ -243,14 +243,15 @@
                 ? upperSec
                 : min(max(requestedSec, minD), upperSec)
 
-            // Pin exact target delay (what UI shows) and jump to now - delay
-            delayTime = roundCMTimeToNearestTenth(CMTime(seconds: clampedSec, preferredTimescale: 600))
-            let targetAbs = now600 - delayTime
+            let targetAbs = now600 - CMTime(seconds: clampedSec, preferredTimescale: 600)
+            let newDelay = roundCMTimeToNearestTenth(CMTime(seconds: clampedSec, preferredTimescale: 600))
 
             printBug(.bugForwardRewind, "rewind to delay:", clampedSec, "available:", availableSec)
 
             DispatchQueue.main.async {
-                self.scrub(to: targetAbs, allowSeekOnly: true)
+                self.scrub(to: targetAbs, allowSeekOnly: true) {
+                    self.delayTime = newDelay
+                }
             }
         }
         
@@ -273,14 +274,15 @@
                 ? upperSec
                 : min(max(requestedSec, minD), upperSec)
 
-            // Pin exact target delay (what UI shows) and jump to now - delay
-            delayTime = roundCMTimeToNearestTenth(CMTime(seconds: clampedSec, preferredTimescale: 600))
-            let targetAbs = now600 - delayTime
+            let targetAbs = now600 - CMTime(seconds: clampedSec, preferredTimescale: 600)
+            let newDelay = roundCMTimeToNearestTenth(CMTime(seconds: clampedSec, preferredTimescale: 600))
 
             printBug(.bugForwardRewind, "forward to delay:", clampedSec, "available:", availableSec)
 
             DispatchQueue.main.async {
-                self.scrub(to: targetAbs, allowSeekOnly: true)
+                self.scrub(to: targetAbs, allowSeekOnly: true) {
+                    self.delayTime = newDelay
+                }
             }
         }
         
